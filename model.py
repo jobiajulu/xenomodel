@@ -210,9 +210,152 @@ class EnhancedXenoTransplantScaling:
             distribution[region['region']] = allocated
             
         return distribution
+    
+    def project_all_transplant_types(self, years: int, organ_type: str, scenario: str) -> pd.DataFrame:
+        """Project all types of transplants including xeno, deceased, and living donors"""
+        base_supply = self.project_organ_supply(years, organ_type, scenario)
+        
+        # Base rates for traditional transplants (example numbers - adjust as needed)
+        base_rates = {
+            'kidney': {'deceased': 15000, 'living': 6000},
+            'heart': {'deceased': 3500, 'living': 0},
+            'liver': {'deceased': 8000, 'living': 500},
+            'lung': {'deceased': 2500, 'living': 0},
+            'pancreas': {'deceased': 1000, 'living': 0}
+        }
+        
+        # Growth rates for traditional transplants
+        annual_growth = {
+            'deceased': 0.02,  # 2% annual growth
+            'living': 0.015    # 1.5% annual growth
+        }
+        
+        results = []
+        for year in range(years):
+            deceased = base_rates[organ_type]['deceased'] * (1 + annual_growth['deceased'])**year
+            living = base_rates[organ_type]['living'] * (1 + annual_growth['living'])**year
+            xeno = float(base_supply.iloc[year]['organ_supply'])
+            
+            results.append({
+                'year': year,
+                'Xenotransplants': xeno,
+                'Deceased Donor': deceased,
+                'Living Donor': living,
+                'Total': xeno + deceased + living
+            })
+        
+        return pd.DataFrame(results)
+    
+    def calculate_waitlist_deaths(self, years: int, organ_type: str, scenario: str) -> pd.DataFrame:
+        """Calculate expected deaths on waitlist with and without xenotransplantation"""
+        
+        # Historical data and projections for waitlist additions (annual growth rate)
+        waitlist_growth_rates = {
+            'kidney': 0.03,  # 3% annual growth
+            'heart': 0.04,   
+            'liver': 0.035,  
+            'lung': 0.04,    
+            'pancreas': 0.02 
+        }
+        
+        # Annual mortality rates on waitlist (based on OPTN/SRTR data)
+        mortality_rates = {
+            'kidney': 0.067,  # 6.7% annual mortality
+            'heart': 0.17,    # 17% annual mortality
+            'liver': 0.14,    # 14% annual mortality
+            'lung': 0.16,     # 16% annual mortality
+            'pancreas': 0.05  # 5% annual mortality
+        }
+        
+        # Initial conditions (based on OPTN data 2023)
+        initial_conditions = {
+            'kidney': {
+                'waitlist_size': 90000,
+                'annual_additions': 30000,
+                'annual_transplants': 25000,
+            },
+            'heart': {
+                'waitlist_size': 3500,
+                'annual_additions': 4000,
+                'annual_transplants': 3500,
+            },
+            'liver': {
+                'waitlist_size': 12000,
+                'annual_additions': 12000,
+                'annual_transplants': 9000,
+            },
+            'lung': {
+                'waitlist_size': 1000,
+                'annual_additions': 3000,
+                'annual_transplants': 2500,
+            },
+            'pancreas': {
+                'waitlist_size': 1200,
+                'annual_additions': 1500,
+                'annual_transplants': 1000,
+            }
+        }
+        
+        # Get initial values for this organ type
+        init = initial_conditions[organ_type]
+        mortality_rate = mortality_rates[organ_type]
+        growth_rate = waitlist_growth_rates[organ_type]
+        
+        # Get transplant projections including xenotransplantation
+        transplant_data = self.project_all_transplant_types(years, organ_type, scenario)
+        
+        results = []
+        
+        # Initialize tracking variables (separate for each scenario)
+        baseline_waitlist = init['waitlist_size']
+        xeno_waitlist = init['waitlist_size']
+        annual_additions = init['annual_additions']
+        
+        for year in range(years):
+            # Update annual additions with growth
+            annual_additions *= (1 + growth_rate)
+            
+            # BASELINE SCENARIO (without xenotransplantation)
+            baseline_transplants = (transplant_data.loc[year, 'Deceased Donor'] + 
+                                  transplant_data.loc[year, 'Living Donor'])
+            
+            # Update baseline waitlist
+            baseline_waitlist = (baseline_waitlist +      # Previous waitlist
+                                 annual_additions -     # New additions
+                                 baseline_transplants)  # Transplants performed
+            
+            # Calculate deaths for baseline scenario
+            baseline_deaths = baseline_waitlist * mortality_rate
+            baseline_waitlist -= baseline_deaths  # Remove deaths from waitlist
+            
+            # XENOTRANSPLANTATION SCENARIO
+            xeno_transplants = transplant_data.loc[year, 'Total']
+            
+            # Update xeno waitlist
+            xeno_waitlist = (xeno_waitlist +      # Previous waitlist
+                             annual_additions -     # New additions
+                             xeno_transplants)      # All transplants including xeno
+            
+            # Calculate deaths for xeno scenario
+            xeno_deaths = max(0, xeno_waitlist * mortality_rate)
+            xeno_waitlist -= xeno_deaths  # Remove deaths from waitlist
+            
+            results.append({
+                'year': year,
+                'baseline_deaths': baseline_deaths,
+                'deaths_with_xeno': xeno_deaths,
+                'lives_saved': baseline_deaths - xeno_deaths,
+                'baseline_waitlist': baseline_waitlist,
+                'waitlist_with_xeno': xeno_waitlist,
+                'annual_additions': annual_additions,
+                'baseline_transplants': baseline_transplants,
+                'xeno_transplants': xeno_transplants
+            })
+        
+        return pd.DataFrame(results)
 
 def run_enhanced_analysis(organ_type: str, years: int = 10, 
-                         scenario: str = 'conservative') -> Tuple[pd.DataFrame, Dict]:
+                         scenario: str = 'conservative') -> Tuple[pd.DataFrame, Dict, pd.DataFrame, pd.DataFrame]:
     """Run complete analysis with all enhancements"""
     
     # Initialize costs
@@ -227,10 +370,9 @@ def run_enhanced_analysis(organ_type: str, years: int = 10,
     
     # Initialize models
     regions = RegionalDistribution()
-    # demand_model = TransplantDemandModel()
     scaling_model = EnhancedXenoTransplantScaling(costs, regions)
     
-    # demand_proj = demand_model.project_waitlist(years, organ_type)
+    # Get projections
     implementation_proj = scaling_model.project_scaled_implementation(years, organ_type, scenario)
     
     # Calculate financial metrics
@@ -246,11 +388,16 @@ def run_enhanced_analysis(organ_type: str, years: int = 10,
         'final_unit_cost': implementation_proj['unit_cost'].iloc[-1]
     }
     
-    return implementation_proj, summary_metrics
+    all_transplants = scaling_model.project_all_transplant_types(years, organ_type, scenario)
+    
+    # Add waitlist death projections
+    waitlist_deaths = scaling_model.calculate_waitlist_deaths(years, organ_type, scenario)
+    
+    return implementation_proj, summary_metrics, all_transplants, waitlist_deaths
 
 # Example usage:
 if __name__ == "__main__":
-    projections, metrics = run_enhanced_analysis('kidney', years=10, scenario='conservative')
+    projections, metrics, all_transplants, waitlist_deaths = run_enhanced_analysis('kidney', years=10, scenario='conservative')
     print("\nProjections:")
     print(projections)
     print("\nSummary Metrics:")
