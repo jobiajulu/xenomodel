@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from model import (Costs, RegionalDistribution, 
+from model import (Costs, RegionalDistribution, FacilityModel, 
                   EnhancedXenoTransplantScaling, run_enhanced_analysis)
 
 st.set_page_config(
@@ -40,19 +40,104 @@ def main():
         
         organ_type = st.selectbox(
             "Organ Type",
-            options=["kidney", "heart", "liver", "lung", "pancreas"],
-            help="Type of organ for transplantation"
+            options=["kidney", "heart", "liver", "lung", "pancreas"]
         )
-
+        
+        # Add new Production Capacity section before Traditional Transplant Growth
+        st.subheader("Production Capacity")
+        initial_capacity = st.number_input(
+            "Initial Annual Capacity per Facility",
+            min_value=50,
+            max_value=1000,
+            value=100,
+            help="Number of organs that can be produced in first year"
+        )
+        
+        mature_capacity = st.number_input(
+            "Mature Annual Capacity per Facility",
+            min_value=initial_capacity,
+            max_value=2000,
+            value=500,
+            help="Maximum number of organs that can be produced per year when facility is mature"
+        )
+        
+        capacity_growth = st.slider(
+            "Annual Capacity Growth Rate (%)",
+            min_value=5,
+            max_value=30,
+            value=15,
+            help="How fast production capacity grows each year"
+        ) / 100.0
+        
+        # Add Surgical Team Parameters
+        st.subheader("Surgical Teams")
+        initial_teams = st.number_input(
+            "Initial Number of Surgical Teams",
+            min_value=1,
+            max_value=20,
+            value=5,
+            help="Number of surgical teams at start"
+        )
+        
+        team_growth = st.slider(
+            "Surgical Team Growth Rate (%)",
+            min_value=5,
+            max_value=50,
+            value=20,
+            help="How fast new surgical teams are added each year"
+        ) / 100.0
+        
+        max_teams = st.number_input(
+            "Maximum Number of Surgical Teams",
+            min_value=initial_teams,
+            max_value=200,
+            value=50,
+            help="Maximum number of surgical teams possible"
+        )
+        
+        # Keep existing Traditional Transplant Growth section
+        st.subheader("Traditional Transplant Growth")
+        deceased_growth = st.slider(
+            "Deceased Donor Annual Growth Rate (%)",
+            min_value=-2.0,
+            max_value=5.0,
+            value=1.0,
+            step=0.1,
+            help="Historical growth rate has been around 1% annually"
+        )
+        
+        living_growth = st.slider(
+            "Living Donor Annual Growth Rate (%)",
+            min_value=-2.0,
+            max_value=5.0,
+            value=0.5,
+            step=0.1,
+            help="Historical growth rate has been around 0.5% annually"
+        )
+        
+        # Convert percentages to decimals for the model
+        growth_rates = {
+            'deceased': float(deceased_growth / 100.0),
+            'living': float(living_growth / 100.0)
+        }
+        
         # Advanced parameters collapsible
         with st.expander("Advanced Parameters"):
             initial_facilities = st.number_input(
                 "Initial Facilities",
                 min_value=1,
-                max_value=10,
+                max_value=100,
                 value=2,
                 help="Number of production facilities at start"
             )
+            
+            facility_growth = st.slider(
+                "Annual Facility Growth Rate (%)",
+                min_value=0,
+                max_value=100,
+                value=25,
+                help="How fast new facilities are added each year"
+            ) / 100.0
             
             success_rate = st.slider(
                 "Procedure Success Rate (%)",
@@ -100,14 +185,39 @@ def main():
         cold_chain_per_mile=100
     )
     
+    # Create FacilityModel instance
+    facility_model = FacilityModel(
+        costs=costs,
+        initial_annual_capacity=initial_capacity,
+        mature_annual_capacity=mature_capacity,
+        capacity_growth_rate=capacity_growth,
+        initial_surgical_teams=initial_teams,
+        surgical_team_growth_rate=team_growth,
+        max_surgical_teams=max_teams
+    )
+    
     regions = RegionalDistribution()
-    scaling_model = EnhancedXenoTransplantScaling(costs, regions)
+    
+    # Pass facility_model to EnhancedXenoTransplantScaling
+    scaling_model = EnhancedXenoTransplantScaling(
+        costs=costs,
+        regions=regions,
+        facility_model=facility_model,  # Pass the FacilityModel instance
+        growth_rates=growth_rates
+    )
     
     # Run analysis
     projections, metrics, all_transplants, waitlist_deaths = run_enhanced_analysis(
         organ_type=organ_type,
         years=years,
-        scenario=scenario
+        scenario=scenario,
+        growth_rates=growth_rates,
+        initial_capacity=initial_capacity,
+        mature_capacity=mature_capacity,
+        capacity_growth_rate=capacity_growth,
+        initial_surgical_teams=initial_teams,
+        surgical_team_growth_rate=team_growth,
+        max_surgical_teams=max_teams
     )
 
     # Main content area
@@ -523,6 +633,121 @@ def main():
         - Heart Transplant: $100,000/QALY
         - Cancer Treatment: $50,000-150,000/QALY
         """)
+
+    # Add this section after the waitlist mortality impact
+    st.header("Expanded Access Impact")
+    expanded_impact = scaling_model.calculate_expanded_access_impact(
+        years, organ_type, scenario)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Plot additional lives impacted
+        fig_expanded = go.Figure()
+        
+        fig_expanded.add_trace(
+            go.Bar(
+                x=expanded_impact['year'],
+                y=expanded_impact['additional_served'],
+                name='Additional Lives Saved'
+            )
+        )
+        
+        fig_expanded.update_layout(
+            title="Additional Lives Saved Through Expanded Access",
+            yaxis_title="Number of Patients",
+            xaxis_title="Years from Now"
+        )
+        
+        st.plotly_chart(fig_expanded, use_container_width=True)
+
+    with col2:
+        # Cost comparison
+        fig_cost = go.Figure()
+        
+        fig_cost.add_trace(
+            go.Scatter(
+                x=expanded_impact['year'],
+                y=expanded_impact['alternative_treatment_cost'],
+                name='Current Treatment Cost',
+                line=dict(color='rgb(239, 85, 59)')
+            )
+        )
+        
+        fig_cost.add_trace(
+            go.Scatter(
+                x=expanded_impact['year'],
+                y=expanded_impact['xenotransplant_cost'],
+                name='Xenotransplant Cost',
+                line=dict(color='rgb(99, 110, 250)')
+            )
+        )
+        
+        fig_cost.update_layout(
+            title="Treatment Cost Comparison",
+            yaxis_title="Annual Cost (USD)",
+            xaxis_title="Years from Now"
+        )
+        
+        st.plotly_chart(fig_cost, use_container_width=True)
+
+    st.header("Industry Investment Analysis")
+    col1, col2 = st.columns(2)
+
+    with col1:
+        # Facility and Infrastructure Costs
+        fig_investment = go.Figure()
+        
+        fig_investment.add_trace(
+            go.Bar(
+                x=projections['year'],
+                y=projections['facility_costs'],
+                name='Facility Costs',
+                marker_color='rgb(158,202,225)'
+            )
+        )
+        
+        fig_investment.add_trace(
+            go.Bar(
+                x=projections['year'],
+                y=projections['operational_costs'],
+                name='Operational Costs',
+                marker_color='rgb(94,158,217)'
+            )
+        )
+        
+        fig_investment.update_layout(
+            title="Annual Industry Investment Required",
+            yaxis_title="Cost (USD)",
+            xaxis_title="Years from Now",
+            barmode='stack',
+            hovermode="x unified"
+        )
+        
+        st.plotly_chart(fig_investment, use_container_width=True)
+
+    with col2:
+        # Cumulative Investment
+        fig_cumulative = go.Figure()
+        
+        fig_cumulative.add_trace(
+            go.Scatter(
+                x=projections['year'],
+                y=projections['cumulative_investment'],
+                name='Total Investment',
+                fill='tonexty',
+                line=dict(color='rgb(94,158,217)', width=2)
+            )
+        )
+        
+        fig_cumulative.update_layout(
+            title="Cumulative Industry Investment",
+            yaxis_title="Cumulative Cost (USD)",
+            xaxis_title="Years from Now",
+            hovermode="x"
+        )
+        
+        st.plotly_chart(fig_cumulative, use_container_width=True)
 
 if __name__ == "__main__":
     main()

@@ -42,8 +42,8 @@ This project provides an interactive model for projecting the potential impact o
 ### Local Setup
 ```bash
 # Clone the repository
-git clone https://github.com/[your-username]/xenotransplantation-model.git
-cd xenotransplantation-model
+git clone https://github.com/jobiajulu/xenomodel.git
+cd xenomodel
 
 # Create a virtual environment (optional but recommended)
 python -m venv venv
@@ -111,7 +111,7 @@ qalys = survival_probability * qol_multiplier * years
 
 ## Project Structure
 ```
-xenotransplantation-model/
+xenomodel/
 ├── README.md
 ├── requirements.txt
 ├── model.py              # Core model implementation

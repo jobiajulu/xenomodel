@@ -88,114 +88,194 @@ class RegionalDistribution:
 
 class FacilityModel:
     """Enhanced facility scaling and operations model"""
-    def __init__(self, costs: Costs):
-        self.costs = costs
-        self.learning_rate = 0.9  # 10% cost reduction per doubling of output
-        self.startup_time = 180  # days from construction to first organ
-        self.max_capacity_utilization = 0.85
+    def __init__(self, costs: Costs,
+                 initial_annual_capacity: int,
+                 mature_annual_capacity: int,
+                 capacity_growth_rate: float,
+                 initial_surgical_teams: int,
+                 surgical_team_growth_rate: float,
+                 max_surgical_teams: int):
         
-        # Facility development stages
-        self.stages = {
-            'planning': 90,  # days
-            'construction': 360,
-            'certification': 90,
-            'initial_operation': 180
+        # Current number of transplant teams by organ type (2023 data)
+        self.current_teams = {
+            'kidney': 250,  # ~250 kidney transplant centers
+            'heart': 150,   # ~150 heart transplant centers
+            'liver': 150,   # ~150 liver transplant centers
+            'lung': 75,     # ~75 lung transplant centers
+            'pancreas': 50  # ~50 pancreas transplant centers
         }
+        
+        self.initial_capacity = initial_annual_capacity
+        self.mature_capacity = mature_annual_capacity
+        self.capacity_growth_rate = capacity_growth_rate
+        
+        # Surgical team constraints
+        self.initial_surgical_teams = initial_surgical_teams
+        self.surgical_team_growth_rate = surgical_team_growth_rate
+        self.max_teams_multiplier = 3  # Can expand current capacity by 3x
+        
+        self.costs = costs
+        self.learning_rate = 0.85
     
-    def calculate_facility_ramp_up(self, days_operating: int) -> float:
-        """Calculate capacity utilization based on facility age"""
-        if days_operating < self.startup_time:
-            return 0.0
-        ramp_up = min((days_operating - self.startup_time) / 360, 1.0)
-        return ramp_up * self.max_capacity_utilization
-    
-    def calculate_unit_cost(self, cumulative_production: int) -> float:
-        """Calculate unit cost with learning curve effects"""
-        if cumulative_production <= 0:
+    def calculate_unit_cost(self, cumulative_production: float) -> float:
+        """Calculate unit cost based on learning curve effects"""
+        if cumulative_production == 0:
             return self.costs.organ_processing
-        # Use learning curve formula: Cost_n = Cost_1 * n^(log_2(learning_rate))
-        return self.costs.organ_processing * (cumulative_production ** (np.log2(self.learning_rate)))
+        
+        # Apply learning curve
+        cost_reduction = (cumulative_production / 1000) ** (np.log2(self.learning_rate))
+        return max(
+            self.costs.organ_processing * cost_reduction,
+            self.costs.organ_processing * 0.3  # Floor at 30% of initial cost
+        )
+    
+    def calculate_annual_capacity(self, year: int) -> float:
+        """Calculate annual production capacity based on growth"""
+        capacity = self.initial_capacity * (1 + self.capacity_growth_rate)**year
+        return min(capacity, self.mature_capacity)
+    
+    def calculate_available_surgeries(self, year: int, organ_type: str) -> int:
+        """Calculate number of possible surgeries based on team constraints"""
+        max_teams = self.current_teams[organ_type] * self.max_teams_multiplier
+        teams = self.initial_surgical_teams * (1 + self.surgical_team_growth_rate)**year
+        teams = min(teams, max_teams)
+        return int(teams * 24)  # Each team can do 24 surgeries per year
 
 class EnhancedXenoTransplantScaling:
     """Enhanced version of original XenoTransplantScaling"""
-    def __init__(self, costs: Costs, regions: RegionalDistribution):
+    def __init__(self, costs: Costs, regions: RegionalDistribution, facility_model: FacilityModel, growth_rates: Dict[str, float] = None):
         self.costs = costs
         self.regions = regions
-        self.facility_model = FacilityModel(costs)
+        self.facility_model = facility_model
         self.survival_model = SurvivalModel()
         
-    def project_organ_supply(self, years: int, organ_type: str, scenario: str) -> pd.DataFrame:
-        """Project organ supply over the specified number of years"""
-        results = []
-        
-        # Base assumptions
-        initial_facilities = 2
-        facility_capacity = 1000  # organs per year
-        growth_rates = {
-            'conservative': 1.2,  # 20% year-over-year growth
-            'moderate': 1.4,     # 40% year-over-year growth
-            'aggressive': 1.6    # 60% year-over-year growth
+        # Use provided growth rates or defaults
+        self.traditional_growth_rates = growth_rates or {
+            'deceased': 0.01,
+            'living': 0.005
         }
         
-        facilities = initial_facilities
+        # Add these new attributes
+        self.potential_recipient_multipliers = {
+            'kidney': 3.0,  # 3x current waitlist (many ESRD patients never listed)
+            'heart': 2.5,   # 2.5x (NYHA Class IV patients not listed)
+            'liver': 2.0,   # 2x (MELD scores too low)
+            'lung': 2.0,    # 2x (too sick to list)
+            'pancreas': 1.5 # 1.5x (less restrictive criteria)
+        }
+        
+        self.alternative_treatment_costs = {
+            'kidney': {
+                'treatment': 'Dialysis',
+                'annual_cost': 90000,  # Annual cost of dialysis
+                'qaly_score': 0.6      # Quality of life score
+            },
+            'heart': {
+                'treatment': 'LVAD',
+                'annual_cost': 150000,  # Annual LVAD maintenance
+                'qaly_score': 0.5
+            },
+            'liver': {
+                'treatment': 'Medical Management',
+                'annual_cost': 70000,
+                'qaly_score': 0.4
+            },
+            'lung': {
+                'treatment': 'Oxygen Therapy',
+                'annual_cost': 50000,
+                'qaly_score': 0.5
+            },
+            'pancreas': {
+                'treatment': 'Insulin Therapy',
+                'annual_cost': 20000,
+                'qaly_score': 0.7
+            }
+        }
+    
+    def project_organ_supply(self, years: int, organ_type: str, scenario: str) -> pd.DataFrame:
+        """Project organ supply over the specified number of years"""
+        print("\n=== Starting project_organ_supply ===")
+        results = []
+        
+        # Calculate facilities based on scenario
+        new_facilities_per_year = {
+            'conservative': 0.25,  # One new facility every 4 years
+            'moderate': 0.5,      # One new facility every 2 years
+            'aggressive': 1.0     # One new facility per year
+        }
+        
+        current_facilities = 1.0  # Start with one facility
+        
         for year in range(years):
-            # Calculate supply based on facilities and utilization
-            utilization = self.facility_model.calculate_facility_ramp_up(year * 365)
-            organ_supply = facilities * facility_capacity * utilization
+            # Calculate production capacity PER FACILITY
+            per_facility_capacity = self.facility_model.calculate_annual_capacity(year)
+            
+            # Total capacity across all facilities
+            total_capacity = per_facility_capacity * current_facilities
+            
+            # Calculate surgical constraint based on organ type
+            available_surgeries = self.facility_model.calculate_available_surgeries(year, organ_type)
+            
+            # Take the minimum of capacity and surgical constraint
+            organ_supply = min(total_capacity, available_surgeries)
             
             results.append({
                 'year': year,
-                'facilities': facilities,
+                'facilities': current_facilities,
+                'per_facility_capacity': per_facility_capacity,
+                'total_capacity': total_capacity,
+                'available_surgeries': available_surgeries,
                 'organ_supply': organ_supply
             })
             
-            # Grow facilities according to scenario
-            facilities *= growth_rates[scenario]
-            
+            # Update facilities for next year
+            current_facilities += new_facilities_per_year[scenario]
+        
         return pd.DataFrame(results)
     
-    def project_scaled_implementation(self, years: int, organ_type: str, 
-                                   scenario: str = 'conservative') -> pd.DataFrame:
+    def project_scaled_implementation(self, years: int, organ_type: str, scenario: str) -> pd.DataFrame:
         """Project complete scaled implementation including regional distribution"""
         base_supply = self.project_organ_supply(years, organ_type, scenario)
         regional_demand = self.regions.calculate_regional_demand(organ_type)
         
         results = []
         cumulative_production = 0
+        cumulative_investment = 0
         
         for year in range(years):
             year_supply = float(base_supply.iloc[year]['organ_supply'])
             facility_count = float(base_supply.iloc[year]['facilities'])
             
-            # Calculate costs with safety checks
-            facility_costs = facility_count * (self.costs.facility_construction / 10 + self.costs.facility_operation)
+            # Calculate facility costs
+            facility_costs = facility_count * self.costs.facility_construction / 10  # Amortized over 10 years
+            operational_costs = facility_count * self.costs.facility_operation
             
             # Calculate unit cost and processing costs
-            unit_cost = float(self.facility_model.calculate_unit_cost(cumulative_production))
-            processing_costs = float(year_supply * unit_cost) if year_supply > 0 else 0.0
+            unit_cost = self.facility_model.calculate_unit_cost(cumulative_production)
+            processing_costs = year_supply * unit_cost
             
-            total_costs = float(facility_costs + processing_costs)
-            
-            # Calculate QALYs
-            qalys_gained = float(year_supply * 
-                           (self.survival_model.calculate_qalys(1, 'post_xeno') -
-                            self.survival_model.calculate_qalys(1, 'waitlist')))
-            
-            # Distribute supply across regions
-            regional_distribution = self._distribute_supply(year_supply, regional_demand)
+            total_costs = facility_costs + operational_costs + processing_costs
+            cumulative_investment += total_costs
             
             results.append({
                 'year': year,
                 'total_supply': year_supply,
                 'cumulative_production': cumulative_production,
+                'facility_costs': facility_costs,
+                'operational_costs': operational_costs,
+                'processing_costs': processing_costs,
                 'total_costs': total_costs,
+                'cumulative_investment': cumulative_investment,
                 'unit_cost': unit_cost,
-                'qalys_gained': qalys_gained,
-                'regional_distribution': regional_distribution
+                'qalys_gained': year_supply * (
+                    self.survival_model.calculate_qalys(1, 'post_xeno') -
+                    self.survival_model.calculate_qalys(1, 'waitlist')
+                ),
+                'regional_distribution': self._distribute_supply(year_supply, regional_demand)
             })
             
             cumulative_production += year_supply
-            
+        
         return pd.DataFrame(results)
     
     def _distribute_supply(self, total_supply: float, 
@@ -213,9 +293,12 @@ class EnhancedXenoTransplantScaling:
     
     def project_all_transplant_types(self, years: int, organ_type: str, scenario: str) -> pd.DataFrame:
         """Project all types of transplants including xeno, deceased, and living donors"""
+        print("\n=== Starting project_all_transplant_types ===")
+        print(f"Growth rates being used: deceased={self.traditional_growth_rates['deceased']}, living={self.traditional_growth_rates['living']}")
+        
         base_supply = self.project_organ_supply(years, organ_type, scenario)
         
-        # Base rates for traditional transplants (example numbers - adjust as needed)
+        # Base rates for traditional transplants
         base_rates = {
             'kidney': {'deceased': 15000, 'living': 6000},
             'heart': {'deceased': 3500, 'living': 0},
@@ -224,17 +307,22 @@ class EnhancedXenoTransplantScaling:
             'pancreas': {'deceased': 1000, 'living': 0}
         }
         
-        # Growth rates for traditional transplants
-        annual_growth = {
-            'deceased': 0.02,  # 2% annual growth
-            'living': 0.015    # 1.5% annual growth
-        }
+        print(f"\nBase rates for {organ_type}:")
+        print(f"- Deceased: {base_rates[organ_type]['deceased']}")
+        print(f"- Living: {base_rates[organ_type]['living']}")
         
         results = []
         for year in range(years):
-            deceased = base_rates[organ_type]['deceased'] * (1 + annual_growth['deceased'])**year
-            living = base_rates[organ_type]['living'] * (1 + annual_growth['living'])**year
+            deceased = base_rates[organ_type]['deceased'] * (1 + self.traditional_growth_rates['deceased'])**year
+            living = base_rates[organ_type]['living'] * (1 + self.traditional_growth_rates['living'])**year
             xeno = float(base_supply.iloc[year]['organ_supply'])
+            
+            if year % 5 == 0:  # Log every 5 years to avoid too much output
+                print(f"\nYear {year} calculations:")
+                print(f"- Deceased: {deceased:.0f}")
+                print(f"- Living: {living:.0f}")
+                print(f"- Xeno: {xeno:.0f}")
+                print(f"- Total: {(deceased + living + xeno):.0f}")
             
             results.append({
                 'year': year,
@@ -244,27 +332,30 @@ class EnhancedXenoTransplantScaling:
                 'Total': xeno + deceased + living
             })
         
-        return pd.DataFrame(results)
+        print("\n=== Final Results ===")
+        df = pd.DataFrame(results)
+        print(df)
+        return df
     
     def calculate_waitlist_deaths(self, years: int, organ_type: str, scenario: str) -> pd.DataFrame:
         """Calculate expected deaths on waitlist with and without xenotransplantation"""
         
-        # Historical data and projections for waitlist additions (annual growth rate)
-        waitlist_growth_rates = {
-            'kidney': 0.03,  # 3% annual growth
-            'heart': 0.04,   
-            'liver': 0.035,  
-            'lung': 0.04,    
-            'pancreas': 0.02 
+        # Add mortality rates by organ type (annual rates)
+        mortality_rates = {
+            'kidney': 0.067,  # 6.7% annual mortality on kidney waitlist
+            'heart': 0.17,    # 17% annual mortality on heart waitlist
+            'liver': 0.12,    # 12% annual mortality on liver waitlist
+            'lung': 0.15,     # 15% annual mortality on lung waitlist
+            'pancreas': 0.05  # 5% annual mortality on pancreas waitlist
         }
         
-        # Annual mortality rates on waitlist (based on OPTN/SRTR data)
-        mortality_rates = {
-            'kidney': 0.067,  # 6.7% annual mortality
-            'heart': 0.17,    # 17% annual mortality
-            'liver': 0.14,    # 14% annual mortality
-            'lung': 0.16,     # 16% annual mortality
-            'pancreas': 0.05  # 5% annual mortality
+        # More conservative growth rates
+        waitlist_growth_rates = {
+            'kidney': 0.015,  # 1.5% annual growth
+            'heart': 0.02,    # 2% annual growth
+            'liver': 0.015,   # 1.5% annual growth
+            'lung': 0.02,     # 2% annual growth
+            'pancreas': 0.01  # 1% annual growth
         }
         
         # Initial conditions (based on OPTN data 2023)
@@ -353,27 +444,103 @@ class EnhancedXenoTransplantScaling:
             })
         
         return pd.DataFrame(results)
+    
+    def calculate_expanded_access_impact(self, years: int, organ_type: str, 
+                                  scenario: str) -> pd.DataFrame:
+        """Calculate impact of expanded access with xenotransplantation"""
+        
+        base_results = self.calculate_waitlist_deaths(years, organ_type, scenario)
+        
+        # Get potential recipient multiplier
+        multiplier = self.potential_recipient_multipliers[organ_type]
+        alt_treatment = self.alternative_treatment_costs[organ_type]
+        
+        # Calculate expanded population
+        expanded_results = []
+        cumulative_production = 0
+        
+        for year in range(years):
+            current_row = base_results.iloc[year]
+            
+            # Calculate potential recipients who could benefit
+            potential_recipients = current_row['baseline_waitlist'] * (multiplier - 1)
+            
+            # Calculate how many could be served with xeno supply
+            available_organs = current_row['xeno_transplants']
+            additional_served = min(potential_recipients, 
+                                  max(0, available_organs - current_row['baseline_waitlist']))
+            
+            # Calculate costs using facility model
+            unit_cost = self.facility_model.calculate_unit_cost(cumulative_production)
+            xenotransplant_cost = unit_cost * additional_served
+            alternative_cost = alt_treatment['annual_cost'] * potential_recipients
+            
+            expanded_results.append({
+                'year': year,
+                'additional_recipients': potential_recipients,
+                'additional_served': additional_served,
+                'alternative_treatment_cost': alternative_cost,
+                'xenotransplant_cost': xenotransplant_cost,
+                'qaly_gained': additional_served * (
+                    self.survival_model.calculate_qalys(1, 'post_xeno') - 
+                    alt_treatment['qaly_score']
+                )
+            })
+            
+            cumulative_production += additional_served
+        
+        return pd.DataFrame(expanded_results)
 
-def run_enhanced_analysis(organ_type: str, years: int = 10, 
-                         scenario: str = 'conservative') -> Tuple[pd.DataFrame, Dict, pd.DataFrame, pd.DataFrame]:
+def run_enhanced_analysis(
+    organ_type: str, 
+    years: int = 10, 
+    scenario: str = 'conservative',
+    growth_rates: Dict[str, float] = None,
+    initial_capacity: int = 100,
+    mature_capacity: int = 500,
+    capacity_growth_rate: float = 0.15,
+    initial_surgical_teams: int = 5,
+    surgical_team_growth_rate: float = 0.2,
+    max_surgical_teams: int = 50,
+    surgeries_per_team: int = 24
+) -> Tuple[pd.DataFrame, Dict, pd.DataFrame, pd.DataFrame]:
     """Run complete analysis with all enhancements"""
     
     # Initialize costs
     costs = Costs(
-        facility_construction=100_000_000,  # $100M per facility
-        facility_operation=20_000_000,      # $20M per year
-        organ_processing=50_000,            # $50K per organ
-        transplant_procedure=250_000,       # $250K per procedure
-        training_per_team=500_000,          # $500K per team
-        cold_chain_per_mile=100            # $100 per mile
+        facility_construction=100_000_000,
+        facility_operation=20_000_000,
+        organ_processing=50_000,
+        transplant_procedure=250_000,
+        training_per_team=500_000,
+        cold_chain_per_mile=100
     )
     
-    # Initialize models
-    regions = RegionalDistribution()
-    scaling_model = EnhancedXenoTransplantScaling(costs, regions)
+    # Initialize models with parameters
+    facility_model = FacilityModel(
+        costs=costs,
+        initial_annual_capacity=initial_capacity,
+        mature_annual_capacity=mature_capacity,
+        capacity_growth_rate=capacity_growth_rate,
+        initial_surgical_teams=initial_surgical_teams,
+        surgical_team_growth_rate=surgical_team_growth_rate,
+        max_surgical_teams=max_surgical_teams
+    )
     
-    # Get projections
+    regions = RegionalDistribution()
+    
+    # Create scaling model
+    scaling_model = EnhancedXenoTransplantScaling(
+        costs=costs,
+        regions=regions,
+        facility_model=facility_model,
+        growth_rates=growth_rates or {'deceased': 0.01, 'living': 0.005}
+    )
+    
+    # Get projections using the model with updated growth rates
     implementation_proj = scaling_model.project_scaled_implementation(years, organ_type, scenario)
+    all_transplants = scaling_model.project_all_transplant_types(years, organ_type, scenario)
+    waitlist_deaths = scaling_model.calculate_waitlist_deaths(years, organ_type, scenario)
     
     # Calculate financial metrics
     total_costs = implementation_proj['total_costs'].sum()
@@ -387,11 +554,6 @@ def run_enhanced_analysis(organ_type: str, years: int = 10,
         'cumulative_organs_produced': implementation_proj['cumulative_production'].max(),
         'final_unit_cost': implementation_proj['unit_cost'].iloc[-1]
     }
-    
-    all_transplants = scaling_model.project_all_transplant_types(years, organ_type, scenario)
-    
-    # Add waitlist death projections
-    waitlist_deaths = scaling_model.calculate_waitlist_deaths(years, organ_type, scenario)
     
     return implementation_proj, summary_metrics, all_transplants, waitlist_deaths
 
