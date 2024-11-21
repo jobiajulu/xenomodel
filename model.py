@@ -1052,13 +1052,17 @@ class EnhancedXenoTransplantScaling:
                 all_transplants['Surgical Capacity'].iloc[year],
                 all_transplants['Facility Capacity'].iloc[year]
             )
-            
+
             # Calculate new additions to waitlist this year
             new_additions = baseline - (base_waitlist * (1 + growth_rate) ** (year-1) if year > 0 else base_waitlist)
-            
+
             # Update current waitlist: add new patients, subtract treated patients
-            current_waitlist = max(0, current_waitlist + new_additions - system_capacity)
-            
+            # current_waitlist = max(0, current_waitlist + new_additions - system_capacity)
+            current_waitlist = max(0, baseline - system_capacity)
+            print("system_capacity =" + str(system_capacity))
+            print("current_waitlist =" + str(current_waitlist))
+            print("base_waitlist =" + str(baseline))
+
             waitlist_data.append({
                 'year': year,
                 'baseline_waitlist': baseline,

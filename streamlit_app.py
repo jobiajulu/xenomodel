@@ -323,7 +323,7 @@ def main():
         st.header("Impact Analysis")
         
         # 1. Organ Supply and Demand (Waitlist)
-        st.subheader("1. Organ Supply and Demand (Waitlist)")
+        st.subheader("1. Impact on Transplant Waitlist")
         col1, col2 = st.columns(2)
         
         with col1:
@@ -340,7 +340,8 @@ def main():
             fig_waitlist.update_layout(
                 title="Waitlist Supply and Demand",
                 xaxis_title="Years from Now",
-                yaxis_title="Number of Patients/Organs"
+                yaxis_title="Number of Patients/Organs",
+                hovermode='x unified'
             )
             st.plotly_chart(fig_waitlist, use_container_width=True)
         
@@ -355,8 +356,7 @@ def main():
                 }).style.format({col: '{:,.0f}' for col in ['Waitlist Demand', 'Traditional Supply', 'Xeno Supply', 'Total Supply']})
             )
         
-        # 2. Waitlist Deaths
-        st.subheader("2. Waitlist Mortality")
+        # 2. Waitlist Size
         col1, col2 = st.columns(2)
         
         with col1:
@@ -378,7 +378,8 @@ def main():
             fig_deaths.update_layout(
                 title="Annual Waitlist Size",
                 xaxis_title="Years from Now",
-                yaxis_title="Number of Patients"
+                yaxis_title="Number of Patients",
+                hovermode='x unified'
             )
             st.plotly_chart(fig_deaths, use_container_width=True)
         
@@ -393,7 +394,106 @@ def main():
                     'Waitlist Without Xeno', 'Waitlist With Xeno', 'Reduction'
                 ]})
             )
-        
+        # Waitlist Mortality Impact (Corrected Version)
+        col1, col2 = st.columns(2)
+
+        with col1:
+            fig_waitlist_impact = go.Figure()
+            
+            # Add baseline deaths (without xeno)
+            fig_waitlist_impact.add_trace(
+                go.Scatter(
+                    x=lives_saved['year'],
+                    y=lives_saved['baseline_deaths'],
+                    name="Without Xenotransplantation",
+                    line=dict(color='rgb(239, 85, 59)', dash='dot')
+                )
+            )
+            
+            # Add deaths with xeno
+            fig_waitlist_impact.add_trace(
+                go.Scatter(
+                    x=lives_saved['year'],
+                    y=lives_saved['deaths_with_xeno'],
+                    name="With Xenotransplantation",
+                    line=dict(color='rgb(99, 110, 250)')
+                )
+            )
+            
+            fig_waitlist_impact.update_layout(
+                title="Annual Deaths on Waitlist",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Deaths",
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig_waitlist_impact, use_container_width=True)
+
+        with col2:
+            waitlist_impact_df = pd.DataFrame({
+                'Year': lives_saved['year'],
+                'Deaths Without Xeno': lives_saved['baseline_deaths'],
+                'Deaths With Xeno': lives_saved['deaths_with_xeno'],
+                'Lives Saved': lives_saved['waitlist_lives_saved']
+            })
+            st.dataframe(
+                waitlist_impact_df.style.format({
+                    'Deaths Without Xeno': '{:,.0f}',
+                    'Deaths With Xeno': '{:,.0f}',
+                    'Lives Saved': '{:,.0f}'
+                })
+            )
+
+        # 3. Closing the Organ Shortage
+        st.subheader("Closing the Organ Shortage")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            fig_shortage = go.Figure()
+            
+            # Add annual demand
+            fig_shortage.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=total_treatment_need,
+                    name="Annual Demand",
+                    line=dict(color='rgb(239, 85, 59)', dash='dot')
+                )
+            )
+            
+            # Add total supply (traditional + xeno)
+            total_supply = [t + x for t, x in zip(traditional_supply, all_transplants['Xenotransplants'])]
+            fig_shortage.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=total_supply,
+                    name="Supply with Xenotransplantation",
+                    fill='tonexty',
+                    line=dict(color='rgb(99, 110, 250)')
+                )
+            )
+            
+            fig_shortage.update_layout(
+                title="Annual Organ Supply vs Demand",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Organs",
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig_shortage, use_container_width=True)
+
+        with col2:
+            shortage_df = pd.DataFrame({
+                'Year': years_list,
+                'Annual Demand': total_treatment_need,
+                'Total Supply': total_supply,
+                'Shortage': [d - s for d, s in zip(total_treatment_need, total_supply)]
+            })
+            st.dataframe(
+                shortage_df.style.format({
+                    'Annual Demand': '{:,.0f}',
+                    'Total Supply': '{:,.0f}',
+                    'Shortage': '{:,.0f}'
+                })
+            )
         # 3. Total Treatment Supply and Demand
         st.subheader("3. Total Treatment Supply and Demand")
         col1, col2 = st.columns(2)
@@ -543,108 +643,6 @@ def main():
                     'Deceased Donor': '{:,.0f}',
                     'Xenotransplants': '{:,.0f}',
                     'Total': '{:,.0f}'
-                })
-            )
-
-        # 2. Waitlist Mortality Impact (Enhanced Version)
-        st.subheader("Waitlist Mortality Impact")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            fig_waitlist_impact = go.Figure()
-            
-            # Add baseline waitlist
-            fig_waitlist_impact.add_trace(
-                go.Scatter(
-                    x=waitlist_deaths['year'],
-                    y=waitlist_deaths['baseline_waitlist'],
-                    name="Without Xenotransplantation",
-                    line=dict(color='rgb(239, 85, 59)', dash='dot')
-                )
-            )
-            
-            # Add waitlist with xeno
-            fig_waitlist_impact.add_trace(
-                go.Scatter(
-                    x=waitlist_deaths['year'],
-                    y=waitlist_deaths['waitlist_with_xeno'],
-                    name="With Xenotransplantation",
-                    line=dict(color='rgb(99, 110, 250)')
-                )
-            )
-            
-            fig_waitlist_impact.update_layout(
-                title="Impact on Organ Waitlist",
-                xaxis_title="Years from Now",
-                yaxis_title="Number of Patients",
-                hovermode='x unified'
-            )
-            st.plotly_chart(fig_waitlist_impact, use_container_width=True)
-
-        with col2:
-            waitlist_impact_df = pd.DataFrame({
-                'Year': waitlist_deaths['year'],
-                'Without Xeno': waitlist_deaths['baseline_waitlist'],
-                'With Xeno': waitlist_deaths['waitlist_with_xeno'],
-                'Lives Saved': waitlist_deaths['baseline_waitlist'] - waitlist_deaths['waitlist_with_xeno']
-            })
-            st.dataframe(
-                waitlist_impact_df.style.format({
-                    'Without Xeno': '{:,.0f}',
-                    'With Xeno': '{:,.0f}',
-                    'Lives Saved': '{:,.0f}'
-                })
-            )
-
-        # 3. Closing the Organ Shortage
-        st.subheader("Closing the Organ Shortage")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            fig_shortage = go.Figure()
-            
-            # Add annual demand
-            fig_shortage.add_trace(
-                go.Scatter(
-                    x=years_list,
-                    y=total_treatment_need,
-                    name="Annual Demand",
-                    line=dict(color='rgb(239, 85, 59)', dash='dot')
-                )
-            )
-            
-            # Add total supply (traditional + xeno)
-            total_supply = [t + x for t, x in zip(traditional_supply, all_transplants['Xenotransplants'])]
-            fig_shortage.add_trace(
-                go.Scatter(
-                    x=years_list,
-                    y=total_supply,
-                    name="Supply with Xenotransplantation",
-                    fill='tonexty',
-                    line=dict(color='rgb(99, 110, 250)')
-                )
-            )
-            
-            fig_shortage.update_layout(
-                title="Annual Organ Supply vs Demand",
-                xaxis_title="Years from Now",
-                yaxis_title="Number of Organs",
-                hovermode='x unified'
-            )
-            st.plotly_chart(fig_shortage, use_container_width=True)
-
-        with col2:
-            shortage_df = pd.DataFrame({
-                'Year': years_list,
-                'Annual Demand': total_treatment_need,
-                'Total Supply': total_supply,
-                'Shortage': [d - s for d, s in zip(total_treatment_need, total_supply)]
-            })
-            st.dataframe(
-                shortage_df.style.format({
-                    'Annual Demand': '{:,.0f}',
-                    'Total Supply': '{:,.0f}',
-                    'Shortage': '{:,.0f}'
                 })
             )
 
