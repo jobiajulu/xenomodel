@@ -1081,6 +1081,7 @@ class EnhancedXenoTransplantScaling:
         """Calculate lives saved with priority given to patients at risk of death"""
         organ_data = self.organ_demand[organ_type]
         annual_waitlist_deaths = organ_data['annual_deaths']
+        base_waitlist = organ_data['waitlist_size']
         
         # Map organ types to their end-stage disease abbreviations
         es_abbrev = {
@@ -1116,11 +1117,17 @@ class EnhancedXenoTransplantScaling:
             waitlist_lives_saved = baseline_deaths - deaths_with_xeno
             
             # Calculate remaining capacity after saving waitlist patients
-            remaining_capacity = max(0, system_capacity - waitlist_lives_saved)
+            # remaining_capacity = max(0, system_capacity - waitlist_lives_saved)
+
+            # Calculate remaining capacity after saving waitlist patients
+            baseline = base_waitlist * (1 + organ_data['growth_rate']) ** year
+            current_waitlist = max(0, baseline - system_capacity)
+            remaining_capacity = max(0, system_capacity - current_waitlist)
             
             # Second priority: save end-stage disease patients (limited by both capacity and deaths)
             es_lives_saved = min(remaining_capacity, es_deaths)
-            
+            es_deaths_with_xeno = es_deaths - es_lives_saved
+
             # Update cumulative totals
             cumulative_saved += waitlist_lives_saved
             cumulative_es_saved += es_lives_saved
@@ -1131,6 +1138,8 @@ class EnhancedXenoTransplantScaling:
                 'deaths_with_xeno': deaths_with_xeno,
                 'waitlist_lives_saved': waitlist_lives_saved,
                 'remaining_capacity': remaining_capacity,
+                'es_baseline_deaths': es_deaths,
+                'es_deaths_with_xeno': es_deaths_with_xeno,
                 'es_lives_saved': es_lives_saved,
                 'total_lives_saved': waitlist_lives_saved + es_lives_saved,
                 'system_capacity': system_capacity,

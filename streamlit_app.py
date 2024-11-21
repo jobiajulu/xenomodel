@@ -38,6 +38,7 @@ def main():
         with st.expander("Facility Parameters", expanded=True):
             use_max_facilities = st.checkbox(
                 "Set Maximum Number of Facilities",
+                value=True,
                 help="Cap the total number of facilities at a maximum value"
             )
             
@@ -45,7 +46,7 @@ def main():
                 max_facilities = st.number_input(
                     "Maximum Number of Facilities",
                     min_value=1,
-                    value=100,
+                    value=500,
                     help="Maximum number of facilities, regardless of growth rate"
                 )
             else:
@@ -92,6 +93,7 @@ def main():
         with st.expander("Surgical Parameters", expanded=True):
             use_max_teams = st.checkbox(
                 "Set Maximum Number of Surgical Teams",
+                value=True,
                 help="Cap the total number of surgical teams at a maximum value"
             )
             
@@ -123,7 +125,7 @@ def main():
             surgeries_per_team = st.number_input(
                 "Annual Surgeries per Team",
                 min_value=1,
-                value=24,
+                value=450,
                 help="Number of surgeries each team can perform annually"
             )
         
@@ -258,7 +260,7 @@ def main():
     with col2:
         st.metric(
             "Waitlist Lives Saved",
-            f"{int(lives_saved['waitlist_lives_saved'].iloc[-1]):,}",
+            f"{int(lives_saved['cumulative_waitlist_saved'].iloc[-1]):,}",
             help="Lives saved specifically from reducing waitlist deaths"
         )
     
@@ -310,8 +312,8 @@ def main():
         bottleneck_amount = min(final_surgical_capacity, final_facility_capacity)
         excess_capacity = abs(final_surgical_capacity - final_facility_capacity)
         st.metric(
-            f"System Capacity Limited by {limiting_factor.title()}",
-            f"{bottleneck_amount:,} transplants/year",
+            f"System Capacity (Currently limited by {limiting_factor.title()})",
+            f"{bottleneck_amount:,} xenotransplants/yr",
             delta=f"{excess_capacity:,} excess {limiting_factor} capacity needed",
             help=f"The {limiting_factor} are the bottleneck. Adding more {limiting_factor} would increase total system capacity."
         )
@@ -322,8 +324,76 @@ def main():
     with tab1:  # Impact Analysis
         st.header("Impact Analysis")
         
+        # 1. Transplant Type Projections
+        st.subheader("1. Transplant Type Projections")
+        st.write("""
+        This graph shows the projected annual organ supply with and without xenotransplantation. 
+        The traditional supply includes both deceased donor transplants (growing at 2% annually, modifiable in model) 
+        and living donor transplants (growing at 1.5% annually, modifiable in model). The xenotransplant supply is based on 
+        facility production capacity and available surgical teams. Base numbers are derived from OPTN/SRTR 
+        2021 Annual Data Report.
+        """)
+        col1, col2 = st.columns(2)
+
+        with col1:
+            fig_transplant_types = go.Figure()
+            
+            # Add deceased donor transplants
+            fig_transplant_types.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=all_transplants['Deceased Donor'],
+                    name="Deceased Donor",
+                    stackgroup='one',
+                    line=dict(width=0.5)
+                )
+            )
+            # Add living donor transplants
+            fig_transplant_types.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=all_transplants['Living Donor'],
+                    name="Living Donor",
+                    stackgroup='one',
+                    line=dict(width=0.5)
+                )
+            )
+            # Add xenotransplants
+            fig_transplant_types.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=all_transplants['Xenotransplants'],
+                    name="Xenotransplants",
+                    stackgroup='one',
+                    line=dict(width=0.5)
+                )
+            )
+            
+            fig_transplant_types.update_layout(
+                title="Annual Transplants by Type",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Transplants",
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig_transplant_types, use_container_width=True)
+
+        with col2:
+            transplant_types_df = pd.DataFrame({
+                'Year': years_list,
+                'Living Donor': all_transplants['Living Donor'],
+                'Deceased Donor': all_transplants['Deceased Donor'],
+                'Xenotransplants': all_transplants['Xenotransplants'],
+                'Total': [t + x for t, x in zip(traditional_supply, all_transplants['Xenotransplants'])]
+            })
+            st.dataframe(
+                transplant_types_df.style.format({
+                    'Living Donor': '{:,.0f}',
+                    'Deceased Donor': '{:,.0f}',
+                    'Xenotransplants': '{:,.0f}',
+                    'Total': '{:,.0f}'
+                })
+            )
         # 1. Organ Supply and Demand (Waitlist)
-        st.subheader("1. Impact on Transplant Waitlist")
         col1, col2 = st.columns(2)
         
         with col1:
@@ -336,6 +406,9 @@ def main():
             )
             fig_waitlist.add_trace(
                 go.Scatter(x=years_list, y=all_transplants['Xenotransplants'], name="Xeno Supply")
+            )
+            fig_waitlist.add_trace(
+                go.Scatter(x=years_list, y=all_transplants['Deceased Donor'] + all_transplants['Living Donor'] + all_transplants['Xenotransplants'], name="Total Supply")
             )
             fig_waitlist.update_layout(
                 title="Waitlist Supply and Demand",
@@ -355,8 +428,15 @@ def main():
                     'Total Supply': [t + x for t, x in zip(traditional_supply, all_transplants['Xenotransplants'])]
                 }).style.format({col: '{:,.0f}' for col in ['Waitlist Demand', 'Traditional Supply', 'Xeno Supply', 'Total Supply']})
             )
-        
-        # 2. Waitlist Size
+
+        # 2. Waitlist Mortality Impact
+        st.subheader("2. Transplant Waitlist Impact")
+        st.write("""
+        This visualization shows the projected annual waitlist size and deaths on the organ waitlist. The baseline scenario 
+        (without xenotransplantation) assumes current waitlist growth and waitlist mortality rates continue with demographic growth. 
+        The impact scenario shows reduced deaths as xenotransplant availability increases. Mortality rates 
+        and growth projections are based on OPTN/SRTR historical data (2012-2021).
+        """)
         col1, col2 = st.columns(2)
         
         with col1:
@@ -442,9 +522,15 @@ def main():
                     'Lives Saved': '{:,.0f}'
                 })
             )
-
+        # 4. End Stage Organ Deaths
+        st.subheader("4. End Stage Disease Treatment and Mortality Impact")
         # 3. Closing the Organ Shortage
-        st.subheader("Closing the Organ Shortage")
+        st.write("""
+        This graph demonstrates how xenotransplantation could help meet total organ demand over time. 
+        The demand line includes both waitlist patients and estimated end-stage organ disease patients 
+        (based on CDC prevalence data). The supply line combines traditional organ sources with projected 
+        xenotransplant production capacity. The shaded area represents the gap being closed.
+        """)
         col1, col2 = st.columns(2)
 
         with col1:
@@ -455,7 +541,7 @@ def main():
                 go.Scatter(
                     x=years_list,
                     y=total_treatment_need,
-                    name="Annual Demand",
+                    name="Annual Demand for End Stage Organ Treatment",
                     line=dict(color='rgb(239, 85, 59)', dash='dot')
                 )
             )
@@ -473,7 +559,7 @@ def main():
             )
             
             fig_shortage.update_layout(
-                title="Annual Organ Supply vs Demand",
+                title="Annual Organ Supply vs Demand for End Stage Organ Treatment",
                 xaxis_title="Years from Now",
                 yaxis_title="Number of Organs",
                 hovermode='x unified'
@@ -489,43 +575,18 @@ def main():
             })
             st.dataframe(
                 shortage_df.style.format({
-                    'Annual Demand': '{:,.0f}',
-                    'Total Supply': '{:,.0f}',
+                    'Annual Demand for End Stage Organ Treatment': '{:,.0f}',
+                    'Total Supply with Xenotransplantation': '{:,.0f}',
                     'Shortage': '{:,.0f}'
                 })
             )
-        # 3. Total Treatment Supply and Demand
-        st.subheader("3. Total Treatment Supply and Demand")
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig_total = go.Figure()
-            fig_total.add_trace(
-                go.Scatter(x=years_list, y=total_treatment_need, name="Total Treatment Need")
-            )
-            fig_total.add_trace(
-                go.Scatter(x=years_list, y=lives_saved['remaining_capacity'], 
-                          name="Available Capacity")
-            )
-            fig_total.update_layout(
-                title="Total Treatment Need vs Available Capacity",
-                xaxis_title="Years from Now",
-                yaxis_title="Number of Patients/Organs"
-            )
-            st.plotly_chart(fig_total, use_container_width=True)
-        
-        with col2:
-            st.dataframe(
-                pd.DataFrame({
-                    'Year': years_list,
-                    'Treatment Need': total_treatment_need,
-                    'Available Capacity': lives_saved['remaining_capacity'],
-                    'Gap': [n - c for n, c in zip(total_treatment_need, lives_saved['remaining_capacity'])]
-                }).style.format({col: '{:,.0f}' for col in ['Treatment Need', 'Available Capacity', 'Gap']})
-            )
-        
-        # 4. End Stage Organ Deaths
-        st.subheader("4. End Stage Disease Mortality")
+        st.markdown("""---""")
+        st.write("""
+        Beyond the impact on waitlist morality, this visualization shows the broader impact on end-stage organ disease mortality. 
+        The model assumes that after meeting waitlist demand, remaining xenotransplant capacity can serve 
+        additional patients with end-stage disease who never made it onto the waitlist. Disease prevalence 
+        and mortality rates are sourced from CDC and NIH databases.
+        """)
         col1, col2 = st.columns(2)
         
         with col1:
@@ -533,14 +594,14 @@ def main():
             fig_es.add_trace(
                 go.Scatter(
                     x=lives_saved['year'],
-                    y=lives_saved['baseline_deaths'],  # Changed from es_baseline_deaths
+                    y=lives_saved['es_baseline_deaths'],  # Changed from es_baseline_deaths
                     name="Without Xenotransplants"
                 )
             )
             fig_es.add_trace(
                 go.Scatter(
                     x=lives_saved['year'],
-                    y=lives_saved['deaths_with_xeno'],  # Changed from es_deaths_with_xeno
+                    y=lives_saved['es_deaths_with_xeno'],  # Changed from es_deaths_with_xeno
                     name="With Xenotransplants"
                 )
             )
@@ -555,16 +616,22 @@ def main():
             st.dataframe(
                 pd.DataFrame({
                     'Year': lives_saved['year'],
-                    'Deaths Without Xeno': lives_saved['baseline_deaths'],
-                    'Deaths With Xeno': lives_saved['deaths_with_xeno'],
-                    'Lives Saved': lives_saved['total_lives_saved']  # Changed to match actual column name
+                    'Deaths Without Xeno': lives_saved['es_baseline_deaths'],
+                    'Deaths With Xeno': lives_saved['es_deaths_with_xeno'],
+                    'Lives Saved': lives_saved['es_lives_saved'] # Changed to match actual column name
                 }).style.format({col: '{:,.0f}' for col in [
                     'Deaths Without Xeno', 'Deaths With Xeno', 'Lives Saved'
                 ]})
             )
-        
-        # 5. Total Lives Saved
+  
+        # 5. Cumulative Lives Saved
         st.subheader("5. Cumulative Lives Saved")
+        st.write("""
+        This graph shows the total cumulative impact of xenotransplantation over time, combining both 
+        waitlist patients saved and additional end-stage disease patients treated. The model accounts for 
+        both immediate waitlist mortality prevention and broader access to transplantation for those who 
+        would otherwise not receive treatment. Five-year survival rates post-transplant are based on SRTR data.
+        """)
         col1, col2 = st.columns(2)
         
         with col1:
@@ -594,58 +661,7 @@ def main():
                 }).style.format({col: '{:,.0f}' for col in ['Waitlist Lives', 'End Stage Lives', 'Total Lives']})
             )
 
-        # 1. Transplant Type Projections
-        st.subheader("Transplant Type Projections")
-        col1, col2 = st.columns(2)
-
-        with col1:
-            fig_transplant_types = go.Figure()
-            
-            # Add deceased donor transplants
-            fig_transplant_types.add_trace(
-                go.Scatter(
-                    x=years_list,
-                    y=traditional_supply,
-                    name="Deceased Donor",
-                    stackgroup='one',
-                    line=dict(width=0.5)
-                )
-            )
-            
-            # Add xenotransplants
-            fig_transplant_types.add_trace(
-                go.Scatter(
-                    x=years_list,
-                    y=all_transplants['Xenotransplants'],
-                    name="Xenotransplants",
-                    stackgroup='one',
-                    line=dict(width=0.5)
-                )
-            )
-            
-            fig_transplant_types.update_layout(
-                title="Annual Transplants by Type",
-                xaxis_title="Years from Now",
-                yaxis_title="Number of Transplants",
-                hovermode='x unified'
-            )
-            st.plotly_chart(fig_transplant_types, use_container_width=True)
-
-        with col2:
-            transplant_types_df = pd.DataFrame({
-                'Year': years_list,
-                'Deceased Donor': traditional_supply,
-                'Xenotransplants': all_transplants['Xenotransplants'],
-                'Total': [t + x for t, x in zip(traditional_supply, all_transplants['Xenotransplants'])]
-            })
-            st.dataframe(
-                transplant_types_df.style.format({
-                    'Deceased Donor': '{:,.0f}',
-                    'Xenotransplants': '{:,.0f}',
-                    'Total': '{:,.0f}'
-                })
-            )
-
+        
     with tab2:  # Cost Impact
         st.header("Healthcare System Cost Impact")
         
