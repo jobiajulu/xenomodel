@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from model import (Costs, RegionalDistribution, FacilityModel, 
+from model import (Costs, RegionalDistribution, EnhancedFacilityModel, 
                   EnhancedXenoTransplantScaling, run_enhanced_analysis)
 
 st.set_page_config(
@@ -12,22 +12,18 @@ st.set_page_config(
 )
 
 def main():
-    # Title and introduction
-    st.title("🫀 Xenotransplantation Impact Projection")
-    st.markdown("""
-    This model projects the potential impact of xenotransplantation on lives saved,
-    based on various growth and implementation scenarios.
-    """)
-
-    # Sidebar for parameters
+    # Header
+    st.title("🫀 Xenotransplantation Impact Model")
+    
+    # Sidebar for model parameters
     with st.sidebar:
         st.header("Model Parameters")
         
-        # Core scenario parameters
-        scenario = st.selectbox(
-            "Growth Scenario",
-            options=["conservative", "moderate", "aggressive"],
-            help="Affects the rate of xenotransplantation adoption and scaling"
+        # Core parameters
+        organ_type = st.selectbox(
+            "Organ Type",
+            options=["kidney", "heart", "liver", "lung", "pancreas"],
+            help="Select the type of organ for transplantation"
         )
         
         years = st.slider(
@@ -38,716 +34,792 @@ def main():
             help="Number of years to project into the future"
         )
         
-        organ_type = st.selectbox(
-            "Organ Type",
-            options=["kidney", "heart", "liver", "lung", "pancreas"]
-        )
-        
-        # Add new Production Capacity section before Traditional Transplant Growth
-        st.subheader("Production Capacity")
-        initial_capacity = st.number_input(
-            "Initial Annual Capacity per Facility",
-            min_value=50,
-            max_value=1000,
-            value=100,
-            help="Number of organs that can be produced in first year"
-        )
-        
-        mature_capacity = st.number_input(
-            "Mature Annual Capacity per Facility",
-            min_value=initial_capacity,
-            max_value=2000,
-            value=500,
-            help="Maximum number of organs that can be produced per year when facility is mature"
-        )
-        
-        capacity_growth = st.slider(
-            "Annual Capacity Growth Rate (%)",
-            min_value=5,
-            max_value=30,
-            value=15,
-            help="How fast production capacity grows each year"
-        ) / 100.0
-        
-        # Add Surgical Team Parameters
-        st.subheader("Surgical Teams")
-        initial_teams = st.number_input(
-            "Initial Number of Surgical Teams",
-            min_value=1,
-            max_value=20,
-            value=5,
-            help="Number of surgical teams at start"
-        )
-        
-        team_growth = st.slider(
-            "Surgical Team Growth Rate (%)",
-            min_value=5,
-            max_value=50,
-            value=20,
-            help="How fast new surgical teams are added each year"
-        ) / 100.0
-        
-        max_teams = st.number_input(
-            "Maximum Number of Surgical Teams",
-            min_value=initial_teams,
-            max_value=200,
-            value=50,
-            help="Maximum number of surgical teams possible"
-        )
-        
-        # Keep existing Traditional Transplant Growth section
-        st.subheader("Traditional Transplant Growth")
-        deceased_growth = st.slider(
-            "Deceased Donor Annual Growth Rate (%)",
-            min_value=-2.0,
-            max_value=5.0,
-            value=1.0,
-            step=0.1,
-            help="Historical growth rate has been around 1% annually"
-        )
-        
-        living_growth = st.slider(
-            "Living Donor Annual Growth Rate (%)",
-            min_value=-2.0,
-            max_value=5.0,
-            value=0.5,
-            step=0.1,
-            help="Historical growth rate has been around 0.5% annually"
-        )
-        
-        # Convert percentages to decimals for the model
-        growth_rates = {
-            'deceased': float(deceased_growth / 100.0),
-            'living': float(living_growth / 100.0)
-        }
-        
-        # Advanced parameters collapsible
-        with st.expander("Advanced Parameters"):
-            initial_facilities = st.number_input(
-                "Initial Facilities",
-                min_value=1,
-                max_value=100,
-                value=2,
-                help="Number of production facilities at start"
+        # Facility parameters
+        with st.expander("Facility Parameters", expanded=True):
+            use_max_facilities = st.checkbox(
+                "Set Maximum Number of Facilities",
+                help="Cap the total number of facilities at a maximum value"
             )
             
+            if use_max_facilities:
+                max_facilities = st.number_input(
+                    "Maximum Number of Facilities",
+                    min_value=1,
+                    value=100,
+                    help="Maximum number of facilities, regardless of growth rate"
+                )
+            else:
+                max_facilities = None
+                
             facility_growth = st.slider(
                 "Annual Facility Growth Rate (%)",
                 min_value=0,
                 max_value=100,
                 value=25,
-                help="How fast new facilities are added each year"
+                help="How fast the number of facilities grows annually (until maximum if set)"
             ) / 100.0
             
-            success_rate = st.slider(
-                "Procedure Success Rate (%)",
-                min_value=70,
-                max_value=100,
-                value=85,
-                help="Expected success rate of xenotransplantation procedures"
+            initial_facilities = st.number_input(
+                "Initial Facilities",
+                min_value=1,
+                value=1,
+                help="Number of production facilities at start"
             )
             
-            learning_rate = st.slider(
-                "Learning Rate",
-                min_value=0.80,
-                max_value=1.00,
-                value=0.90,
-                step=0.01,
-                help="Cost reduction per doubling of production (0.9 = 10% reduction)"
+            initial_capacity = st.number_input(
+                "Initial Annual Capacity per Facility",
+                min_value=10,
+                value=100,
+                help="Number of organs each facility can produce initially"
             )
-
-        # Cost parameters collapsible
-        with st.expander("Cost Parameters"):
+            
+            mature_capacity = st.number_input(
+                "Mature Annual Capacity per Facility",
+                min_value=initial_capacity,
+                value=500,
+                help="Maximum number of organs each facility can produce when mature"
+            )
+            
+            capacity_growth_rate = st.slider(
+                "Per-Facility Capacity Growth Rate (%)",
+                min_value=0,
+                max_value=100,
+                value=15,
+                help="How fast each facility's production capacity grows annually"
+            ) / 100.0
+        
+        # Surgical parameters
+        with st.expander("Surgical Parameters", expanded=True):
+            use_max_teams = st.checkbox(
+                "Set Maximum Number of Surgical Teams",
+                help="Cap the total number of surgical teams at a maximum value"
+            )
+            
+            if use_max_teams:
+                max_surgical_teams = st.number_input(
+                    "Maximum Number of Surgical Teams",
+                    min_value=1,
+                    value=500,
+                    help="Maximum number of surgical teams, regardless of growth rate"
+                )
+            else:
+                max_surgical_teams = None
+                
+            surgical_team_growth = st.slider(
+                "Surgical Team Growth Rate (%)",
+                min_value=0,
+                max_value=100,
+                value=20,
+                help="How fast the number of surgical teams grows annually (until maximum if set)"
+            ) / 100.0
+            
+            initial_surgical_teams = st.number_input(
+                "Initial Surgical Teams",
+                min_value=1,
+                value=5,
+                help="Number of surgical teams at start"
+            )
+            
+            surgeries_per_team = st.number_input(
+                "Annual Surgeries per Team",
+                min_value=1,
+                value=24,
+                help="Number of surgeries each team can perform annually"
+            )
+        
+        # Cost parameters
+        with st.expander("Cost Parameters", expanded=True):
             facility_cost = st.number_input(
                 "Facility Construction (Millions USD)",
-                min_value=50,
-                max_value=200,
+                min_value=10,
                 value=100,
                 help="Cost to build a new production facility"
             )
             
+            facility_operation = st.number_input(
+                "Annual Facility Operation (Millions USD)",
+                min_value=1,
+                value=20,
+                help="Annual cost to operate each facility"
+            )
+            
             organ_processing = st.number_input(
                 "Organ Processing Cost (USD)",
-                min_value=10000,
-                max_value=100000,
+                min_value=1000,
                 value=50000,
-                step=5000,
+                step=1000,
                 help="Cost to process each organ"
             )
-
-    # Run model with selected parameters
+            
+            transplant_procedure = st.number_input(
+                "Transplant Procedure Cost (USD)",
+                min_value=10000,
+                value=250000,
+                step=10000,
+                help="Cost of the transplant surgery"
+            )
+            
+            training_cost = st.number_input(
+                "Training Cost per Team (USD)",
+                min_value=10000,
+                value=500000,
+                step=10000,
+                help="Cost to train each surgical team"
+            )
+            
+            cold_chain_cost = st.number_input(
+                "Cold Chain Cost per Mile (USD)",
+                min_value=1,
+                value=100,
+                help="Cost to transport organs per mile"
+            )
+        
+        # Growth rates
+        with st.expander("Growth Rate Parameters", expanded=True):
+            growth_rates = {
+                'deceased': st.slider(
+                    "Deceased Donor Growth Rate (%)",
+                    min_value=0.0,
+                    max_value=10.0,
+                    value=2.0,
+                    help="Annual growth rate for deceased donor transplants"
+                ) / 100.0,
+                'living': st.slider(
+                    "Living Donor Growth Rate (%)",
+                    min_value=0.0,
+                    max_value=10.0,
+                    value=1.5,
+                    help="Annual growth rate for living donor transplants"
+                ) / 100.0
+            }
+    
+    # Initialize models and run analysis
     costs = Costs(
         facility_construction=facility_cost * 1_000_000,
-        facility_operation=20_000_000,
+        facility_operation=facility_operation * 1_000_000,
         organ_processing=organ_processing,
-        transplant_procedure=250_000,
-        training_per_team=500_000,
-        cold_chain_per_mile=100
+        transplant_procedure=transplant_procedure,
+        training_per_team=training_cost,
+        cold_chain_per_mile=cold_chain_cost
     )
     
-    # Create FacilityModel instance
-    facility_model = FacilityModel(
-        costs=costs,
-        initial_annual_capacity=initial_capacity,
-        mature_annual_capacity=mature_capacity,
-        capacity_growth_rate=capacity_growth,
-        initial_surgical_teams=initial_teams,
-        surgical_team_growth_rate=team_growth,
-        max_surgical_teams=max_teams
-    )
+    facility_model = EnhancedFacilityModel(costs=costs)
     
-    regions = RegionalDistribution()
-    
-    # Pass facility_model to EnhancedXenoTransplantScaling
-    scaling_model = EnhancedXenoTransplantScaling(
-        costs=costs,
-        regions=regions,
-        facility_model=facility_model,  # Pass the FacilityModel instance
-        growth_rates=growth_rates
-    )
-    
-    # Run analysis
-    projections, metrics, all_transplants, waitlist_deaths = run_enhanced_analysis(
+    # Run analysis with all user-defined parameters
+    projections, metrics, all_transplants, waitlist_deaths, lives_saved, traditional_supply, total_treatment_need = run_enhanced_analysis(
         organ_type=organ_type,
         years=years,
-        scenario=scenario,
-        growth_rates=growth_rates,
+        facility_growth_rate=facility_growth,
+        max_facilities=max_facilities if use_max_facilities else None,
+        initial_facilities=initial_facilities,
         initial_capacity=initial_capacity,
         mature_capacity=mature_capacity,
-        capacity_growth_rate=capacity_growth,
-        initial_surgical_teams=initial_teams,
-        surgical_team_growth_rate=team_growth,
-        max_surgical_teams=max_teams
+        capacity_growth_rate=capacity_growth_rate,
+        initial_surgical_teams=initial_surgical_teams,
+        surgical_team_growth_rate=surgical_team_growth,
+        max_surgical_teams=max_surgical_teams if use_max_teams else None,
+        surgeries_per_team=surgeries_per_team,
+        growth_rates=growth_rates
     )
 
-    # Main content area
-    col1, col2 = st.columns(2)
+    # Create scaling model to calculate lives saved
+    scaling_model = EnhancedXenoTransplantScaling(
+        costs=costs,
+        regions=RegionalDistribution(),
+        facility_model=EnhancedFacilityModel(costs=costs)
+    )
     
-    with col1:
-        # Lives saved plot
-        fig1 = make_subplots(specs=[[{"secondary_y": True}]])
-        
-        fig1.add_trace(
-            go.Bar(
-                x=projections['year'],
-                y=projections['total_supply'],
-                name="Annual Lives Saved"
-            ),
-            secondary_y=False
-        )
-        
-        fig1.add_trace(
-            go.Scatter(
-                x=projections['year'],
-                y=projections['total_supply'].cumsum(),
-                name="Cumulative Lives Saved",
-                line=dict(width=3)
-            ),
-            secondary_y=True
-        )
-        
-        fig1.update_layout(
-            title="Lives Saved from Xenotransplantation",
-            hovermode="x unified"
-        )
-        
-        st.plotly_chart(fig1, use_container_width=True)
+    # Calculate lives saved
+    lives_saved = scaling_model.calculate_lives_saved(
+        organ_type=organ_type,
+        years=years,
+        waitlist_deaths=waitlist_deaths,
+        all_transplants=all_transplants
+    )
 
-    with col2:
-        # Cost trajectory
-        fig2 = go.Figure()
-        
-        fig2.add_trace(
-            go.Scatter(
-                x=projections['year'],
-                y=projections['unit_cost'],
-                name="Cost per Transplant",
-                fill='tonexty'
-            )
-        )
-        
-        fig2.update_layout(
-            title="Cost per Xenotransplant Over Time",
-            yaxis_title="Cost (USD)",
-            hovermode="x"
-        )
-        
-        st.plotly_chart(fig2, use_container_width=True)
+    # Calculate demand trajectory
+    organ_data = facility_model.organ_demand[organ_type]
+    base_demand = organ_data['waitlist_size']
+    growth_rate = organ_data['growth_rate']
+    demand = [base_demand * (1 + growth_rate) ** year for year in range(years)]
+    years_list = list(range(years))  # Create years list for plotting
 
-    # Summary metrics
-    st.header("Impact Summary")
+    # Top-level metrics
+    # First row
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric(
             "Total Lives Saved",
-            f"{projections['total_supply'].sum():,.0f}",
-            delta=f"{projections['total_supply'].iloc[-1]:,.0f}/year"
+            f"{int(lives_saved['cumulative_total_saved'].iloc[-1]):,}",
+            help="Cumulative number of lives saved through xenotransplantation"
         )
     
     with col2:
         st.metric(
-            "Cost per QALY",
-            f"${metrics['cost_per_qaly']:,.0f}"
+            "Waitlist Lives Saved",
+            f"{int(lives_saved['waitlist_lives_saved'].iloc[-1]):,}",
+            help="Lives saved specifically from reducing waitlist deaths"
         )
     
     with col3:
         st.metric(
-            "Total Investment Required",
-            f"${metrics['total_investment_required']/1e9:.1f}B"
+            "Additional Lives Saved",
+            f"{int(lives_saved['cumulative_es_saved'].iloc[-1]):,}",
+            help="Additional lives saved beyond waitlist reduction"
         )
     
     with col4:
         st.metric(
-            "Final Unit Cost",
-            f"${metrics['final_unit_cost']:,.0f}",
-            delta=f"{((metrics['final_unit_cost']/organ_processing)-1)*100:.1f}%"
+            "Current Annual Impact",
+            f"{int(lives_saved['total_lives_saved'].iloc[-1]):,}/year",
+            help="Current annual rate of lives being saved"
         )
 
-    # Regional distribution
-    st.header("Regional Distribution")
-    final_distribution = projections.iloc[-1]['regional_distribution']
-    
-    fig3 = go.Figure(data=[
-        go.Bar(
-            x=list(final_distribution.keys()),
-            y=list(final_distribution.values())
-        )
-    ])
-    
-    fig3.update_layout(
-        title="Final Year Regional Distribution",
-        xaxis_title="Region",
-        yaxis_title="Number of Transplants"
-    )
-    
-    st.plotly_chart(fig3, use_container_width=True)
-
-    # Export options
-    st.header("Export Results")
-    if st.button("Download Projection Data"):
-        csv = projections.to_csv(index=False)
-        st.download_button(
-            label="Download CSV",
-            data=csv,
-            file_name="xenotransplant_projections.csv",
-            mime="text/csv"
-        )
-
-    # Transplant Type Projections
-    st.header("Transplant Type Projections")
-    
-    # Create the composite line graph
-    fig4 = go.Figure()
-    
-    # Add traces for each transplant type
-    for column in ['Xenotransplants', 'Deceased Donor', 'Living Donor']:
-        fig4.add_trace(
-            go.Scatter(
-                x=all_transplants['year'],
-                y=all_transplants[column],
-                name=column,
-                mode='lines',
-                line=dict(width=3)
-            )
-        )
-    
-    # Add total line
-    fig4.add_trace(
-        go.Scatter(
-            x=all_transplants['year'],
-            y=all_transplants['Total'],
-            name='Total Transplants',
-            mode='lines',
-            line=dict(width=3, dash='dash')
-        )
-    )
-    
-    fig4.update_layout(
-        title=f"Projected {organ_type.title()} Transplants by Source",
-        xaxis_title="Year",
-        yaxis_title="Number of Transplants",
-        hovermode="x unified",
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        )
-    )
-    
-    st.plotly_chart(fig4, use_container_width=True)
-    
-    # Add a summary table below the graph
-    st.subheader("Transplant Projections Summary")
-    summary_years = [0, 4, 9, 14, 19] if years > 20 else [0, 2, 4, 9]
-    summary_df = all_transplants[all_transplants['year'].isin(summary_years)].copy()
-    summary_df['year'] = summary_df['year'].apply(lambda x: f"Year {x}")
-    st.dataframe(
-        summary_df.set_index('year').round(0),
-        use_container_width=True
-    )
-
-    # Waitlist Mortality Impact
-    st.header("Waitlist Mortality Impact")
-    
-    # Create the mortality comparison graph
-    fig5 = go.Figure()
-    
-    # Add traces for deaths with and without xenotransplantation
-    fig5.add_trace(
-        go.Scatter(
-            x=waitlist_deaths['year'],
-            y=waitlist_deaths['baseline_deaths'],
-            name='Deaths without Xenotransplantation',
-            mode='lines',
-            line=dict(width=3, color='rgb(239, 85, 59)')
-        )
-    )
-    
-    fig5.add_trace(
-        go.Scatter(
-            x=waitlist_deaths['year'],
-            y=waitlist_deaths['deaths_with_xeno'],
-            name='Deaths with Xenotransplantation',
-            mode='lines',
-            line=dict(width=3, color='rgb(99, 110, 250)')
-        )
-    )
-    
-    # Add shaded area for lives saved
-    fig5.add_trace(
-        go.Scatter(
-            x=waitlist_deaths['year'],
-            y=waitlist_deaths['baseline_deaths'],
-            fill=None,
-            mode='lines',
-            line=dict(width=0),
-            showlegend=False
-        )
-    )
-    
-    fig5.add_trace(
-        go.Scatter(
-            x=waitlist_deaths['year'],
-            y=waitlist_deaths['deaths_with_xeno'],
-            fill='tonexty',
-            mode='lines',
-            line=dict(width=0),
-            name='Lives Saved',
-            fillcolor='rgba(99, 110, 250, 0.2)'
-        )
-    )
-    
-    fig5.update_layout(
-        title=f"Projected Annual Deaths on {organ_type.title()} Waitlist",
-        xaxis_title="Year",
-        yaxis_title="Number of Deaths",
-        hovermode="x unified",
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        )
-    )
-    
-    st.plotly_chart(fig5, use_container_width=True)
-    
-    # Add summary metrics
-    total_lives_saved = waitlist_deaths['lives_saved'].sum()
-    final_year_reduction = (
-        (waitlist_deaths['baseline_deaths'].iloc[-1] - 
-         waitlist_deaths['deaths_with_xeno'].iloc[-1]) / 
-        waitlist_deaths['baseline_deaths'].iloc[-1] * 100
-    )
-    
-    col1, col2 = st.columns(2)
+    # Second row
+    col1, col2, col3 = st.columns(3)
     with col1:
+        if use_max_teams:
+            final_teams = max_surgical_teams
+        else:
+            final_teams = int(initial_surgical_teams * (1 + surgical_team_growth) ** (years - 1))
+        final_surgical_capacity = final_teams * surgeries_per_team
         st.metric(
-            "Total Lives Saved from Waitlist",
-            f"{total_lives_saved:,.0f}",
-            help="Cumulative reduction in waitlist deaths over the projection period"
+            "Surgical Teams in Final Year",
+            f"{final_teams:,} teams",
+            delta=f"Can perform {final_surgical_capacity:,} surgeries/year",
+            help="Number of trained surgical teams performing xenotransplants"
         )
     with col2:
+        if use_max_facilities:
+            final_facilities = max_facilities
+        else:
+            final_facilities = int(initial_facilities * (1 + facility_growth) ** (years - 1))
+        final_facility_capacity = int(final_facilities * min(
+            initial_capacity * (1 + capacity_growth_rate) ** (years - 1),
+            mature_capacity
+        ))
         st.metric(
-            "Final Year Mortality Reduction",
-            f"{final_year_reduction:.1f}%",
-            help="Percentage reduction in annual deaths by the final year"
+            "Production Facilities in Final Year",
+            f"{final_facilities:,} facilities",
+            delta=f"Can produce {final_facility_capacity:,} organs/year",
+            help="Number of active xenotransplant organ production facilities"
+        )
+    with col3:
+        limiting_factor = "surgical teams" if final_surgical_capacity < final_facility_capacity else "facilities"
+        bottleneck_amount = min(final_surgical_capacity, final_facility_capacity)
+        excess_capacity = abs(final_surgical_capacity - final_facility_capacity)
+        st.metric(
+            f"System Capacity Limited by {limiting_factor.title()}",
+            f"{bottleneck_amount:,} transplants/year",
+            delta=f"{excess_capacity:,} excess {limiting_factor} capacity needed",
+            help=f"The {limiting_factor} are the bottleneck. Adding more {limiting_factor} would increase total system capacity."
         )
 
-    st.header("The Human Cost of Waiting")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Cumulative deaths over time
-        fig_deaths = go.Figure()
+    # Create the tabs
+    tab1, tab2, tab3 = st.tabs(["Impact Analysis", "Cost Impact", "Industrial Growth"])
+    
+    with tab1:  # Impact Analysis
+        st.header("Impact Analysis")
         
-        cumulative_baseline_deaths = waitlist_deaths['baseline_deaths'].cumsum()
-        cumulative_xeno_deaths = waitlist_deaths['deaths_with_xeno'].cumsum()
+        # 1. Organ Supply and Demand (Waitlist)
+        st.subheader("1. Organ Supply and Demand (Waitlist)")
+        col1, col2 = st.columns(2)
         
-        fig_deaths.add_trace(
-            go.Scatter(
-                x=waitlist_deaths['year'],
-                y=cumulative_baseline_deaths,
-                name='Deaths without Xenotransplantation',
-                fill='tozeroy',
-                fillcolor='rgba(239, 85, 59, 0.2)',
-                line=dict(color='rgb(239, 85, 59)', width=2)
+        with col1:
+            fig_waitlist = go.Figure()
+            fig_waitlist.add_trace(
+                go.Scatter(x=years_list, y=demand, name="Waitlist Demand")
             )
-        )
+            fig_waitlist.add_trace(
+                go.Scatter(x=years_list, y=traditional_supply, name="Traditional Supply")
+            )
+            fig_waitlist.add_trace(
+                go.Scatter(x=years_list, y=all_transplants['Xenotransplants'], name="Xeno Supply")
+            )
+            fig_waitlist.update_layout(
+                title="Waitlist Supply and Demand",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Patients/Organs"
+            )
+            st.plotly_chart(fig_waitlist, use_container_width=True)
         
-        fig_deaths.update_layout(
-            title="Cumulative Lives Lost on Waitlist",
-            yaxis_title="Total Deaths",
-            xaxis_title="Years from Now",
-            hovermode="x unified"
-        )
+        with col2:
+            st.dataframe(
+                pd.DataFrame({
+                    'Year': years_list,
+                    'Waitlist Demand': demand,
+                    'Traditional Supply': traditional_supply,
+                    'Xeno Supply': all_transplants['Xenotransplants'],
+                    'Total Supply': [t + x for t, x in zip(traditional_supply, all_transplants['Xenotransplants'])]
+                }).style.format({col: '{:,.0f}' for col in ['Waitlist Demand', 'Traditional Supply', 'Xeno Supply', 'Total Supply']})
+            )
         
-        st.plotly_chart(fig_deaths, use_container_width=True)
-
-    with col2:
-        # Key statistics
-        total_deaths_baseline = cumulative_baseline_deaths.iloc[-1]
-        total_deaths_xeno = cumulative_xeno_deaths.iloc[-1]
-        lives_saved = total_deaths_baseline - total_deaths_xeno
+        # 2. Waitlist Deaths
+        st.subheader("2. Waitlist Mortality")
+        col1, col2 = st.columns(2)
         
-        st.metric(
-            "Total Lives That Could Be Saved",
-            f"{lives_saved:,.0f}",
-            help="Difference in cumulative deaths over projection period"
-        )
+        with col1:
+            fig_deaths = go.Figure()
+            fig_deaths.add_trace(
+                go.Scatter(
+                    x=waitlist_deaths['year'],
+                    y=waitlist_deaths['baseline_waitlist'],  # Changed from baseline_deaths
+                    name="Without Xenotransplants"
+                )
+            )
+            fig_deaths.add_trace(
+                go.Scatter(
+                    x=waitlist_deaths['year'],
+                    y=waitlist_deaths['waitlist_with_xeno'],  # Changed from deaths_with_xeno
+                    name="With Xenotransplants"
+                )
+            )
+            fig_deaths.update_layout(
+                title="Annual Waitlist Size",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Patients"
+            )
+            st.plotly_chart(fig_deaths, use_container_width=True)
         
-        # Daily impact
-        daily_deaths = waitlist_deaths['baseline_deaths'].mean() / 365
-        st.metric(
-            "Current Daily Deaths on Waitlist",
-            f"{daily_deaths:.1f}",
-            help="Average number of people dying each day while waiting"
-        )
-
-    st.header("Impact on Wait Times")
-    fig_wait = go.Figure()
-
-    fig_wait.add_trace(
-        go.Scatter(
-            x=waitlist_deaths['year'],
-            y=waitlist_deaths['baseline_waitlist'],
-            name='Without Xenotransplantation',
-            line=dict(color='rgb(239, 85, 59)', width=2)
-        )
-    )
-
-    fig_wait.add_trace(
-        go.Scatter(
-            x=waitlist_deaths['year'],
-            y=waitlist_deaths['waitlist_with_xeno'],
-            name='With Xenotransplantation',
-            line=dict(color='rgb(99, 110, 250)', width=2)
-        )
-    )
-
-    fig_wait.update_layout(
-        title="Projected Waitlist Size Over Time",
-        yaxis_title="Number of Patients Waiting",
-        xaxis_title="Years from Now",
-        hovermode="x unified"
-    )
-
-    st.plotly_chart(fig_wait, use_container_width=True)
-
-    st.header("Closing the Organ Shortage")
-    fig_gap = go.Figure()
-
-    # Calculate annual demand
-    annual_demand = waitlist_deaths['annual_additions']
-
-    fig_gap.add_trace(
-        go.Scatter(
-            x=all_transplants['year'],
-            y=annual_demand,
-            name='Annual Demand',
-            line=dict(color='rgb(239, 85, 59)', width=2, dash='dash')
-        )
-    )
-
-    fig_gap.add_trace(
-        go.Scatter(
-            x=all_transplants['year'],
-            y=all_transplants['Total'],
-            name='Supply with Xenotransplantation',
-            fill='tonexty',
-            fillcolor='rgba(99, 110, 250, 0.2)',
-            line=dict(color='rgb(99, 110, 250)', width=2)
-        )
-    )
-
-    fig_gap.update_layout(
-        title="Annual Organ Supply vs Demand",
-        yaxis_title="Number of Organs",
-        xaxis_title="Years from Now",
-        hovermode="x unified"
-    )
-
-    st.plotly_chart(fig_gap, use_container_width=True)
-
-    st.header("Economic Impact")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Cost per life saved over time
-        fig_cost = go.Figure()
+        with col2:
+            st.dataframe(
+                pd.DataFrame({
+                    'Year': waitlist_deaths['year'],
+                    'Waitlist Without Xeno': waitlist_deaths['baseline_waitlist'],
+                    'Waitlist With Xeno': waitlist_deaths['waitlist_with_xeno'],
+                    'Reduction': waitlist_deaths['baseline_waitlist'] - waitlist_deaths['waitlist_with_xeno']
+                }).style.format({col: '{:,.0f}' for col in [
+                    'Waitlist Without Xeno', 'Waitlist With Xeno', 'Reduction'
+                ]})
+            )
         
-        annual_cost_per_life = projections['total_costs'] / waitlist_deaths['lives_saved']
+        # 3. Total Treatment Supply and Demand
+        st.subheader("3. Total Treatment Supply and Demand")
+        col1, col2 = st.columns(2)
         
-        fig_cost.add_trace(
+        with col1:
+            fig_total = go.Figure()
+            fig_total.add_trace(
+                go.Scatter(x=years_list, y=total_treatment_need, name="Total Treatment Need")
+            )
+            fig_total.add_trace(
+                go.Scatter(x=years_list, y=lives_saved['remaining_capacity'], 
+                          name="Available Capacity")
+            )
+            fig_total.update_layout(
+                title="Total Treatment Need vs Available Capacity",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Patients/Organs"
+            )
+            st.plotly_chart(fig_total, use_container_width=True)
+        
+        with col2:
+            st.dataframe(
+                pd.DataFrame({
+                    'Year': years_list,
+                    'Treatment Need': total_treatment_need,
+                    'Available Capacity': lives_saved['remaining_capacity'],
+                    'Gap': [n - c for n, c in zip(total_treatment_need, lives_saved['remaining_capacity'])]
+                }).style.format({col: '{:,.0f}' for col in ['Treatment Need', 'Available Capacity', 'Gap']})
+            )
+        
+        # 4. End Stage Organ Deaths
+        st.subheader("4. End Stage Disease Mortality")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_es = go.Figure()
+            fig_es.add_trace(
+                go.Scatter(
+                    x=lives_saved['year'],
+                    y=lives_saved['baseline_deaths'],  # Changed from es_baseline_deaths
+                    name="Without Xenotransplants"
+                )
+            )
+            fig_es.add_trace(
+                go.Scatter(
+                    x=lives_saved['year'],
+                    y=lives_saved['deaths_with_xeno'],  # Changed from es_deaths_with_xeno
+                    name="With Xenotransplants"
+                )
+            )
+            fig_es.update_layout(
+                title="Annual End Stage Disease Deaths",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Deaths"
+            )
+            st.plotly_chart(fig_es, use_container_width=True)
+        
+        with col2:
+            st.dataframe(
+                pd.DataFrame({
+                    'Year': lives_saved['year'],
+                    'Deaths Without Xeno': lives_saved['baseline_deaths'],
+                    'Deaths With Xeno': lives_saved['deaths_with_xeno'],
+                    'Lives Saved': lives_saved['total_lives_saved']  # Changed to match actual column name
+                }).style.format({col: '{:,.0f}' for col in [
+                    'Deaths Without Xeno', 'Deaths With Xeno', 'Lives Saved'
+                ]})
+            )
+        
+        # 5. Total Lives Saved
+        st.subheader("5. Cumulative Lives Saved")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            fig_lives = go.Figure()
+            fig_lives.add_trace(
+                go.Scatter(x=lives_saved['year'], y=lives_saved['cumulative_waitlist_saved'], 
+                          name="Waitlist Lives", stackgroup='one')
+            )
+            fig_lives.add_trace(
+                go.Scatter(x=lives_saved['year'], y=lives_saved['cumulative_es_saved'], 
+                          name="End Stage Lives", stackgroup='one')
+            )
+            fig_lives.update_layout(
+                title="Cumulative Lives Saved",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Lives"
+            )
+            st.plotly_chart(fig_lives, use_container_width=True)
+        
+        with col2:
+            st.dataframe(
+                pd.DataFrame({
+                    'Year': lives_saved['year'],
+                    'Waitlist Lives': lives_saved['cumulative_waitlist_saved'],
+                    'End Stage Lives': lives_saved['cumulative_es_saved'],
+                    'Total Lives': lives_saved['cumulative_total_saved']
+                }).style.format({col: '{:,.0f}' for col in ['Waitlist Lives', 'End Stage Lives', 'Total Lives']})
+            )
+
+        # 1. Transplant Type Projections
+        st.subheader("Transplant Type Projections")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            fig_transplant_types = go.Figure()
+            
+            # Add deceased donor transplants
+            fig_transplant_types.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=traditional_supply,
+                    name="Deceased Donor",
+                    stackgroup='one',
+                    line=dict(width=0.5)
+                )
+            )
+            
+            # Add xenotransplants
+            fig_transplant_types.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=all_transplants['Xenotransplants'],
+                    name="Xenotransplants",
+                    stackgroup='one',
+                    line=dict(width=0.5)
+                )
+            )
+            
+            fig_transplant_types.update_layout(
+                title="Annual Transplants by Type",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Transplants",
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig_transplant_types, use_container_width=True)
+
+        with col2:
+            transplant_types_df = pd.DataFrame({
+                'Year': years_list,
+                'Deceased Donor': traditional_supply,
+                'Xenotransplants': all_transplants['Xenotransplants'],
+                'Total': [t + x for t, x in zip(traditional_supply, all_transplants['Xenotransplants'])]
+            })
+            st.dataframe(
+                transplant_types_df.style.format({
+                    'Deceased Donor': '{:,.0f}',
+                    'Xenotransplants': '{:,.0f}',
+                    'Total': '{:,.0f}'
+                })
+            )
+
+        # 2. Waitlist Mortality Impact (Enhanced Version)
+        st.subheader("Waitlist Mortality Impact")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            fig_waitlist_impact = go.Figure()
+            
+            # Add baseline waitlist
+            fig_waitlist_impact.add_trace(
+                go.Scatter(
+                    x=waitlist_deaths['year'],
+                    y=waitlist_deaths['baseline_waitlist'],
+                    name="Without Xenotransplantation",
+                    line=dict(color='rgb(239, 85, 59)', dash='dot')
+                )
+            )
+            
+            # Add waitlist with xeno
+            fig_waitlist_impact.add_trace(
+                go.Scatter(
+                    x=waitlist_deaths['year'],
+                    y=waitlist_deaths['waitlist_with_xeno'],
+                    name="With Xenotransplantation",
+                    line=dict(color='rgb(99, 110, 250)')
+                )
+            )
+            
+            fig_waitlist_impact.update_layout(
+                title="Impact on Organ Waitlist",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Patients",
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig_waitlist_impact, use_container_width=True)
+
+        with col2:
+            waitlist_impact_df = pd.DataFrame({
+                'Year': waitlist_deaths['year'],
+                'Without Xeno': waitlist_deaths['baseline_waitlist'],
+                'With Xeno': waitlist_deaths['waitlist_with_xeno'],
+                'Lives Saved': waitlist_deaths['baseline_waitlist'] - waitlist_deaths['waitlist_with_xeno']
+            })
+            st.dataframe(
+                waitlist_impact_df.style.format({
+                    'Without Xeno': '{:,.0f}',
+                    'With Xeno': '{:,.0f}',
+                    'Lives Saved': '{:,.0f}'
+                })
+            )
+
+        # 3. Closing the Organ Shortage
+        st.subheader("Closing the Organ Shortage")
+        col1, col2 = st.columns(2)
+
+        with col1:
+            fig_shortage = go.Figure()
+            
+            # Add annual demand
+            fig_shortage.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=total_treatment_need,
+                    name="Annual Demand",
+                    line=dict(color='rgb(239, 85, 59)', dash='dot')
+                )
+            )
+            
+            # Add total supply (traditional + xeno)
+            total_supply = [t + x for t, x in zip(traditional_supply, all_transplants['Xenotransplants'])]
+            fig_shortage.add_trace(
+                go.Scatter(
+                    x=years_list,
+                    y=total_supply,
+                    name="Supply with Xenotransplantation",
+                    fill='tonexty',
+                    line=dict(color='rgb(99, 110, 250)')
+                )
+            )
+            
+            fig_shortage.update_layout(
+                title="Annual Organ Supply vs Demand",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Organs",
+                hovermode='x unified'
+            )
+            st.plotly_chart(fig_shortage, use_container_width=True)
+
+        with col2:
+            shortage_df = pd.DataFrame({
+                'Year': years_list,
+                'Annual Demand': total_treatment_need,
+                'Total Supply': total_supply,
+                'Shortage': [d - s for d, s in zip(total_treatment_need, total_supply)]
+            })
+            st.dataframe(
+                shortage_df.style.format({
+                    'Annual Demand': '{:,.0f}',
+                    'Total Supply': '{:,.0f}',
+                    'Shortage': '{:,.0f}'
+                })
+            )
+
+    with tab2:  # Cost Impact
+        st.header("Healthcare System Cost Impact")
+        
+        # Total Healthcare Cost Over Time
+        fig_total_cost = go.Figure()
+        fig_total_cost.add_trace(
             go.Scatter(
                 x=projections['year'],
-                y=annual_cost_per_life,
-                name='Cost per Life Saved',
-                line=dict(color='rgb(99, 110, 250)', width=2)
+                y=projections['total_costs'],
+                name="Total Healthcare Cost",
+                fill='tozeroy'
             )
         )
-        
-        fig_cost.update_layout(
-            title="Cost per Life Saved Over Time",
+        fig_total_cost.update_layout(
+            title="Total Healthcare Cost Over Time",
+            xaxis_title="Years from Now",
             yaxis_title="Cost (USD)",
+            yaxis_tickformat='$,.0f'
+        )
+        st.plotly_chart(fig_total_cost, use_container_width=True)
+        
+        # Cost per Xenotransplant Over Time
+        fig_unit_cost = go.Figure()
+        fig_unit_cost.add_trace(
+            go.Scatter(
+                x=projections['year'],
+                y=projections['unit_cost'],
+                name="Cost per Xenotransplant",
+                fill='tozeroy'
+            )
+        )
+        fig_unit_cost.update_layout(
+            title="Cost per Xenotransplant Over Time",
             xaxis_title="Years from Now",
-            hovermode="x"
-        )
-        
-        st.plotly_chart(fig_cost, use_container_width=True)
-
-    with col2:
-        # QALY comparison
-        st.metric(
-            "Cost per QALY",
-            f"${metrics['cost_per_qaly']:,.0f}",
-            help="Cost per Quality Adjusted Life Year"
-        )
-        
-        # Compare to other medical interventions
-        st.markdown("""
-        **Comparison to Other Life-Saving Interventions:**
-        - Kidney Dialysis: $129,000/QALY
-        - Heart Transplant: $100,000/QALY
-        - Cancer Treatment: $50,000-150,000/QALY
-        """)
-
-    # Add this section after the waitlist mortality impact
-    st.header("Expanded Access Impact")
-    expanded_impact = scaling_model.calculate_expanded_access_impact(
-        years, organ_type, scenario)
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Plot additional lives impacted
-        fig_expanded = go.Figure()
-        
-        fig_expanded.add_trace(
-            go.Bar(
-                x=expanded_impact['year'],
-                y=expanded_impact['additional_served'],
-                name='Additional Lives Saved'
-            )
-        )
-        
-        fig_expanded.update_layout(
-            title="Additional Lives Saved Through Expanded Access",
-            yaxis_title="Number of Patients",
-            xaxis_title="Years from Now"
-        )
-        
-        st.plotly_chart(fig_expanded, use_container_width=True)
-
-    with col2:
-        # Cost comparison
-        fig_cost = go.Figure()
-        
-        fig_cost.add_trace(
-            go.Scatter(
-                x=expanded_impact['year'],
-                y=expanded_impact['alternative_treatment_cost'],
-                name='Current Treatment Cost',
-                line=dict(color='rgb(239, 85, 59)')
-            )
-        )
-        
-        fig_cost.add_trace(
-            go.Scatter(
-                x=expanded_impact['year'],
-                y=expanded_impact['xenotransplant_cost'],
-                name='Xenotransplant Cost',
-                line=dict(color='rgb(99, 110, 250)')
-            )
-        )
-        
-        fig_cost.update_layout(
-            title="Treatment Cost Comparison",
-            yaxis_title="Annual Cost (USD)",
-            xaxis_title="Years from Now"
-        )
-        
-        st.plotly_chart(fig_cost, use_container_width=True)
-
-    st.header("Industry Investment Analysis")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Facility and Infrastructure Costs
-        fig_investment = go.Figure()
-        
-        fig_investment.add_trace(
-            go.Bar(
-                x=projections['year'],
-                y=projections['facility_costs'],
-                name='Facility Costs',
-                marker_color='rgb(158,202,225)'
-            )
-        )
-        
-        fig_investment.add_trace(
-            go.Bar(
-                x=projections['year'],
-                y=projections['operational_costs'],
-                name='Operational Costs',
-                marker_color='rgb(94,158,217)'
-            )
-        )
-        
-        fig_investment.update_layout(
-            title="Annual Industry Investment Required",
             yaxis_title="Cost (USD)",
-            xaxis_title="Years from Now",
-            barmode='stack',
-            hovermode="x unified"
+            yaxis_tickformat='$,.0f'
         )
-        
-        st.plotly_chart(fig_investment, use_container_width=True)
+        st.plotly_chart(fig_unit_cost, use_container_width=True)
 
-    with col2:
-        # Cumulative Investment
-        fig_cumulative = go.Figure()
+    with tab3:  # Industrial Growth
+        st.header("Infrastructure Development")
         
-        fig_cumulative.add_trace(
-            go.Scatter(
-                x=projections['year'],
-                y=projections['cumulative_investment'],
-                name='Total Investment',
-                fill='tonexty',
-                line=dict(color='rgb(94,158,217)', width=2)
+        # Surgical Teams Section
+        st.subheader("Surgical Teams Growth")
+        col1, col2 = st.columns(2)
+        
+        # Calculate surgical metrics
+        surgical_data = pd.DataFrame({
+            'Year': projections['year'],
+            'Number of Surgical Teams': projections['surgical_teams'],
+            'Total Surgical Capacity': projections['available_surgeries'],
+            'Average Surgeries per Team': (
+                projections['available_surgeries'] / projections['surgical_teams']
+            ).round(1)
+        })
+        
+        with col1:
+            fig_surgical = go.Figure()
+            fig_surgical.add_trace(
+                go.Scatter(
+                    x=surgical_data['Year'],
+                    y=surgical_data['Number of Surgical Teams'],
+                    name="Surgical Teams",
+                    line=dict(color='rgb(100, 100, 255)', width=2)
+                )
             )
-        )
+            fig_surgical.update_layout(
+                title="Growth in Surgical Teams",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Teams"
+            )
+            st.plotly_chart(fig_surgical, use_container_width=True)
         
-        fig_cumulative.update_layout(
-            title="Cumulative Industry Investment",
-            yaxis_title="Cumulative Cost (USD)",
-            xaxis_title="Years from Now",
-            hovermode="x"
-        )
+        with col2:
+            st.dataframe(
+                surgical_data.style.format({
+                    'Number of Surgical Teams': '{:,.0f}',
+                    'Total Surgical Capacity': '{:,.0f}',
+                    'Average Surgeries per Team': '{:.1f}'
+                })
+            )
         
-        st.plotly_chart(fig_cumulative, use_container_width=True)
+        # Facilities Section
+        st.subheader("Production Facilities Growth")
+        col1, col2 = st.columns(2)
+        
+        # Calculate facility metrics
+        facility_data = pd.DataFrame({
+            'Year': projections['year'],
+            'Number of Facilities': projections['facilities'],
+            'Total Production Capacity': projections['total_capacity'],
+            'Average Production per Facility': (
+                projections['total_capacity'] / projections['facilities']
+            ).round(1)
+        })
+        
+        with col1:
+            fig_facilities = go.Figure()
+            fig_facilities.add_trace(
+                go.Scatter(
+                    x=facility_data['Year'],
+                    y=facility_data['Number of Facilities'],
+                    name="Facilities",
+                    line=dict(color='rgb(100, 200, 100)', width=2)
+                )
+            )
+            fig_facilities.update_layout(
+                title="Growth in Production Facilities",
+                xaxis_title="Years from Now",
+                yaxis_title="Number of Facilities"
+            )
+            st.plotly_chart(fig_facilities, use_container_width=True)
+        
+        with col2:
+            st.dataframe(
+                facility_data.style.format({
+                    'Number of Facilities': '{:,.0f}',
+                    'Total Production Capacity': '{:,.0f}',
+                    'Average Production per Facility': '{:.1f}'
+                })
+            )
+        
+        # Cost Analysis Section
+        st.subheader("Development Costs")
+        col1, col2 = st.columns(2)
+        
+        # Calculate development costs
+        surgical_costs = projections['surgical_teams'] * costs.training_per_team
+        facility_costs = (projections['facilities'] * 
+                        (costs.facility_construction + costs.facility_operation))
+        
+        cost_data = pd.DataFrame({
+            'Year': projections['year'],
+            'Surgical Program Costs': surgical_costs,
+            'Facility Development Costs': facility_costs,
+            'Total Infrastructure Costs': surgical_costs + facility_costs
+        })
+        
+        with col1:
+            fig_costs = go.Figure()
+            fig_costs.add_trace(
+                go.Scatter(
+                    x=cost_data['Year'],
+                    y=cost_data['Surgical Program Costs'],
+                    name="Surgical Program",
+                    line=dict(color='rgb(100, 100, 255)', width=2)
+                )
+            )
+            fig_costs.add_trace(
+                go.Scatter(
+                    x=cost_data['Year'],
+                    y=cost_data['Facility Development Costs'],
+                    name="Facility Development",
+                    line=dict(color='rgb(100, 200, 100)', width=2)
+                )
+            )
+            fig_costs.update_layout(
+                title="Development Costs Over Time",
+                xaxis_title="Years from Now",
+                yaxis_title="Cost (USD)",
+                yaxis_tickformat='$,.0f'
+            )
+            st.plotly_chart(fig_costs, use_container_width=True)
+        
+        with col2:
+            st.dataframe(
+                cost_data.style.format({
+                    'Surgical Program Costs': '${:,.0f}',
+                    'Facility Development Costs': '${:,.0f}',
+                    'Total Infrastructure Costs': '${:,.0f}'
+                })
+            )
 
 if __name__ == "__main__":
     main()
