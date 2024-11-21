@@ -1059,9 +1059,6 @@ class EnhancedXenoTransplantScaling:
             # Update current waitlist: add new patients, subtract treated patients
             # current_waitlist = max(0, current_waitlist + new_additions - system_capacity)
             current_waitlist = max(0, baseline - system_capacity)
-            print("system_capacity =" + str(system_capacity))
-            print("current_waitlist =" + str(current_waitlist))
-            print("base_waitlist =" + str(baseline))
 
             waitlist_data.append({
                 'year': year,
@@ -1122,11 +1119,17 @@ class EnhancedXenoTransplantScaling:
             # Calculate remaining capacity after saving waitlist patients
             baseline = base_waitlist * (1 + organ_data['growth_rate']) ** year
             current_waitlist = max(0, baseline - system_capacity)
-            remaining_capacity = max(0, system_capacity - current_waitlist)
-            
+            remaining_capacity = max(0, system_capacity - baseline)
+
+            print("system_capacity =" + str(system_capacity))
+            print("current_waitlist =" + str(current_waitlist))
+            print("base_waitlist =" + str(baseline))
+            print("remaining_capacity =" + str(remaining_capacity))
             # Second priority: save end-stage disease patients (limited by both capacity and deaths)
             es_lives_saved = min(remaining_capacity, es_deaths)
             es_deaths_with_xeno = es_deaths - es_lives_saved
+            print("es_deaths_with_xeno =" + str(es_deaths_with_xeno))
+            print("es_lives_saved =" + str(es_lives_saved))
 
             # Update cumulative totals
             cumulative_saved += waitlist_lives_saved

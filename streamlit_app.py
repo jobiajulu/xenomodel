@@ -15,6 +15,16 @@ def main():
     # Header
     st.title("🫀 Xenotransplantation Impact Model")
     
+    st.markdown("""
+    This model projects the potential impact of xenotransplantation (animal-to-human organ transplants) on addressing the organ shortage crisis. 
+    It considers facility scaling, surgical capacity, waitlist dynamics, and broader end-stage organ disease impact. Use the sidebar parameters to explore different scenarios.
+
+    Built by Joseph Obiajulu(joseph.obiajulu@nyulangone.org) at NYU Grossman School of Medicine.  
+    View source code and documentation on [GitHub](https://github.com/jobiajulu/xenomodel/tree/main).
+                
+    ---
+    """)
+    
     # Sidebar for model parameters
     with st.sidebar:
         st.header("Model Parameters")
@@ -70,7 +80,7 @@ def main():
             initial_capacity = st.number_input(
                 "Initial Annual Capacity per Facility",
                 min_value=10,
-                value=100,
+                value=10,
                 help="Number of organs each facility can produce initially"
             )
             
