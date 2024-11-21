@@ -135,7 +135,7 @@ def main():
             surgeries_per_team = st.number_input(
                 "Annual Surgeries per Team",
                 min_value=1,
-                value=450,
+                value=125,
                 help="Number of surgeries each team can perform annually"
             )
         
